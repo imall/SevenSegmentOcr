@@ -1,6 +1,7 @@
 using OpenCvSharp;
 using SevenSegmentOcr.Imaging;
 using SevenSegmentOcr.Models;
+using SevenSegmentOcr.Recognition;
 
 // ════════════════════════════════════════════════════════════════
 // 用法：
@@ -15,7 +16,7 @@ using SevenSegmentOcr.Models;
 //   4. 裁切 + 前處理 + 輸出
 // ════════════════════════════════════════════════════════════════
 
-var imagePath  = args.FirstOrDefault(a => !a.StartsWith("--")) ?? "./images/5.png";
+var imagePath  = args.FirstOrDefault(a => !a.StartsWith("--")) ?? "./images/14.png";
 var forceSelect = args.Contains("--select");
 const string configPath = "roi_config.json";
 const string outputDir  = @"D:\projects\ocr";
@@ -93,8 +94,25 @@ foreach (var cfg in configs)
     var procPath = Path.Combine(outputDir, $"{cfg.Id}_proc.jpg");
     Cv2.ImWrite(rawPath,  roi);
     Cv2.ImWrite(procPath, processed);
+    
+    // ── DigitSegmenter 測試 ────────────────────────────────────
+    var segmenter = new DigitSegmenter();
+    var boxes = segmenter.FindDigitBoxes(processed);
+    Console.WriteLine($"  平均亮度：{Cv2.Mean(processed).Val0:F1}，切出 {boxes.Count} 個字元");
 
-    Console.WriteLine($"id={cfg.Id:D2} [{cfg.DeviceType,-11}] → {Path.GetFileName(procPath)}");
+    using var debugViz = processed.CvtColor(ColorConversionCodes.GRAY2BGR);
+    foreach (var (box, idx) in boxes.Select((b, i) => (b, i)))
+    {
+        Cv2.Rectangle(debugViz, box, Scalar.Red, 2);
+        Cv2.PutText(debugViz, idx.ToString(),
+            new Point(box.X, box.Y - 4),
+            HersheyFonts.HersheySimplex, 0.5, Scalar.Red, 1);
+    }
+    var vizPath = Path.Combine(outputDir, $"{cfg.Id}_seg.jpg");
+    Cv2.ImWrite(vizPath, debugViz);
+    // ──────────────────────────────────────────────────────────
+
+    // Console.WriteLine($"id={cfg.Id:D2} [{cfg.DeviceType,-11}] → {Path.GetFileName(procPath)}");
 }
 
 Console.WriteLine($"\n完成，請檢查：{Path.GetFullPath(outputDir)}");
