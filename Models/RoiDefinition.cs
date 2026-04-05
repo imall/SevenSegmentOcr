@@ -1,4 +1,6 @@
-namespace SevenSegmentOcr.Imaging;
+using System.Text.Json.Serialization;
+
+namespace SevenSegmentOcr.Models;
 
 /// <summary>
 /// 裝置外型，決定後續辨識策略
@@ -18,11 +20,10 @@ public enum DeviceType
 /// 感興趣區域定義：包含裁切座標、裝置外型與顯示類型
 /// </summary>
 public record RoiDefinition(
-    int Id,
-    int X,
-    int Y,
-    int Width,
-    int Height,
-    DeviceType DeviceType
+    [property: JsonPropertyName("Id")]     int Id,
+    [property: JsonPropertyName("X")]      int X,
+    [property: JsonPropertyName("Y")]      int Y,
+    [property: JsonPropertyName("Width")]  int Width,
+    [property: JsonPropertyName("Height")] int Height,
+    [property: JsonPropertyName("DeviceType")] DeviceType DeviceType
 );
-

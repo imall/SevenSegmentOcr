@@ -1,4 +1,4 @@
-namespace SevenSegmentOcr.Imaging;
+namespace SevenSegmentOcr.Models;
 
 /// <summary>
 /// ImagePreprocessor 的可調參數，集中管理方便調教

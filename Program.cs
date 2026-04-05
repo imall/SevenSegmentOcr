@@ -1,29 +1,44 @@
 using OpenCvSharp;
 using SevenSegmentOcr.Imaging;
+using SevenSegmentOcr.Models;
 
 // ════════════════════════════════════════════════════════════════
-// 用法：dotnet run -- <圖片路徑>
-// 輸出：debug_output/<id>_raw/proc_<x>_<y>.jpg
+// 用法：
+//   dotnet run -- [圖片路徑] [--select]
+//
+//   --select  強制重新框選 ROI（忽略現有 roi_config.json）
+//
+// 流程：
+//   1. 載入圖片
+//   2. 若無 config 或指定 --select，顯示圖片讓使用者框選 ROI 並寫入 JSON
+//   3. 從 JSON 讀取 ROI 設定
+//   4. 裁切 + 前處理 + 輸出
 // ════════════════════════════════════════════════════════════════
 
-var imagePath = args.Length > 0 ? args[0] : "./images/5.png";
-var outputDir = "debug_output";
+var imagePath  = args.FirstOrDefault(a => !a.StartsWith("--")) ?? "./images/5.png";
+var forceSelect = args.Contains("--select");
+const string configPath = "roi_config.json";
+const string outputDir  = @"D:\projects\ocr";
 Directory.CreateDirectory(outputDir);
 
-// 對應 Python CONFIG
-var configs = new[]
-{
-    new RoiDefinition(Id:  1, X: 1034, Y:  363,  Width: 238, Height: 122, DeviceType.Circular),
-    new RoiDefinition(Id:  2, X: 1822, Y:  423,  Width: 228, Height: 117, DeviceType.Circular),
-    new RoiDefinition(Id:  3, X: 2657, Y:  427,  Width: 230, Height: 123, DeviceType.Circular),
-    new RoiDefinition(Id:  4, X: 3379, Y:  358,  Width: 254, Height: 144, DeviceType.Rectangular),
-    new RoiDefinition(Id:  5, X: 1049, Y: 1570,  Width: 281, Height: 133, DeviceType.Circular),
-    new RoiDefinition(Id:  6, X: 1789, Y: 1567,  Width: 267, Height: 112, DeviceType.Circular),
-    new RoiDefinition(Id:  7, X: 2537, Y: 1585,  Width: 284, Height: 120, DeviceType.Circular),
-    new RoiDefinition(Id:  8, X: 3324, Y: 1550,  Width: 230, Height: 158, DeviceType.Rectangular),
-    new RoiDefinition(Id: 11, X: 2536, Y: 2615,  Width: 226, Height: 158, DeviceType.Rectangular),
-    new RoiDefinition(Id: 12, X: 3216, Y: 2634,  Width: 250, Height: 159, DeviceType.Circular),
-};
+
+// ── Step 2：取得 ROI 設定（互動框選 or 讀取 JSON）─────────────
+RoiDefinition[] configs;
+
+//  讀取 JSON
+// configs = new[]
+// {
+//     new RoiDefinition(Id:  1, X: 1034, Y:  343,  Width: 238, Height: 122, DeviceType.Circular),
+//     new RoiDefinition(Id:  2, X: 1822, Y:  400,  Width: 228, Height: 117, DeviceType.Circular),
+//     new RoiDefinition(Id:  3, X: 2657, Y:  420,  Width: 230, Height: 123, DeviceType.Circular),
+//     new RoiDefinition(Id:  4, X: 3379, Y:  358,  Width: 280, Height: 144, DeviceType.Rectangular),
+//     // new RoiDefinition(Id:  5, X: 1049, Y: 1570,  Width: 281, Height: 133, DeviceType.Circular),
+//     // new RoiDefinition(Id:  6, X: 1789, Y: 1567,  Width: 267, Height: 112, DeviceType.Circular),
+//     // new RoiDefinition(Id:  7, X: 2537, Y: 1585,  Width: 284, Height: 120, DeviceType.Circular),
+//     new RoiDefinition(Id:  8, X: 3324, Y: 1540,  Width: 300, Height: 144, DeviceType.Rectangular),
+//     // new RoiDefinition(Id: 11, X: 2536, Y: 2615,  Width: 226, Height: 158, DeviceType.Rectangular),
+//     // new RoiDefinition(Id: 12, X: 3216, Y: 2634,  Width: 250, Height: 159, DeviceType.Circular),
+// };
 
 // 載入原始圖片
 using var fullImage = Cv2.ImRead(imagePath, ImreadModes.Color);
@@ -32,8 +47,38 @@ if (fullImage.Empty())
     Console.WriteLine($"[錯誤] 無法載入圖片：{imagePath}");
     return;
 }
-Console.WriteLine($"載入圖片：{imagePath} ({fullImage.Cols}x{fullImage.Rows})\n");
+Console.WriteLine($"載入圖片：{imagePath} ({fullImage.Cols}x{fullImage.Rows})");
 
+
+
+var loaded = forceSelect ? null : RoiConfigStore.TryLoad(configPath);
+if (loaded is { Length: > 0 })
+{
+    configs = loaded;
+    Console.WriteLine($"載入 ROI 設定：{Path.GetFullPath(configPath)} ({configs.Length} 個區域)\n");
+}
+else
+{
+    Console.WriteLine(forceSelect
+        ? "\n[--select] 強制重新框選 ROI"
+        : $"\n找不到 {configPath}，進入互動框選模式");
+    Console.WriteLine("操作：拖曳框選 → SPACE/ENTER 確認一個 → ESC 完成所有選取\n");
+
+    configs = RoiSelector.Select(fullImage);
+
+    if (configs.Length == 0)
+    {
+        Console.WriteLine("[取消] 未框選任何 ROI，結束。");
+        return;
+    }
+
+    // ── Step 3：寫入 config ────────────────────────────────────
+    RoiConfigStore.Save(configs, configPath);
+    Console.WriteLine($"已儲存 {configs.Length} 個 ROI → {Path.GetFullPath(configPath)}");
+    Console.WriteLine("[提示] 可直接編輯 JSON 中的 DeviceType（Circular / Rectangular）\n");
+}
+
+// ── Step 4：裁切 + 前處理 + 儲存 ──────────────────────────────
 var preprocessor = new ImagePreprocessor();
 var roiLoader    = new RoiLoader(expandPixels: 0);
 
@@ -44,9 +89,8 @@ foreach (var cfg in configs)
 
     using var processed = preprocessor.Process(roi);
 
-    // 同時儲存原始裁切和處理後，方便對比
-    var rawPath  = Path.Combine(outputDir, $"{cfg.Id}_raw_{cfg.X}_{cfg.Y}.jpg");
-    var procPath = Path.Combine(outputDir, $"{cfg.Id}_proc_{cfg.X}_{cfg.Y}.jpg");
+    var rawPath  = Path.Combine(outputDir, $"{cfg.Id}_raw.jpg");
+    var procPath = Path.Combine(outputDir, $"{cfg.Id}_proc.jpg");
     Cv2.ImWrite(rawPath,  roi);
     Cv2.ImWrite(procPath, processed);
 

@@ -1,4 +1,5 @@
 using OpenCvSharp;
+using SevenSegmentOcr.Models;
 
 namespace SevenSegmentOcr.Imaging;
 

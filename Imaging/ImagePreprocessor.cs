@@ -1,4 +1,5 @@
 using OpenCvSharp;
+using SevenSegmentOcr.Models;
 
 namespace SevenSegmentOcr.Imaging;
 
@@ -14,12 +15,13 @@ public class ImagePreprocessor(PreprocessorOptions? options = null) : IDisposabl
     /// </summary>
     public Mat Process(Mat input)
     {
-        using var gray = ToGrayscale(input);
-        using var resized = Upscale(gray);
-        using var blurred = SmoothStrokes(resized);
-        using var binary = Binarize(blurred);
-        using var morphed = ApplyMorphology(binary);
-        var padded = AddPadding(morphed);
+        using var gray     = ToGrayscale(input);
+        using var cropped  = CropEdgeBands(gray);   // ← 加這行
+        using var resized  = Upscale(cropped);
+        using var blurred  = SmoothStrokes(resized);
+        using var binary   = Binarize(blurred);
+        using var morphed  = ApplyMorphology(binary);
+        var padded         = AddPadding(morphed);
         return EnsureBlackOnWhite(padded);
     }
 
@@ -32,6 +34,14 @@ public class ImagePreprocessor(PreprocessorOptions? options = null) : IDisposabl
         return gray;
     }
 
+    // ── Step 2：處理上方噪點 (裝置上方黑色部分) ─────────────────────────
+    private static Mat CropEdgeBands(Mat src, double trimY = 0.08, double trimX = 0.03)
+    {
+        int ty = (int)(src.Rows * trimY);
+        int tx = (int)(src.Cols * trimX);
+        var roi = new Rect(tx, ty, src.Cols - tx * 2, src.Rows - ty * 2);
+        return new Mat(src, roi);
+    }
 
     // ── Step 3：超解析度放大 ───────────────────────────────────────
     private Mat Upscale(Mat src)
