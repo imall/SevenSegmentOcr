@@ -1,0 +1,23 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net8.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <RootNamespace>SevenSegmentOcr</RootNamespace>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!-- OpenCV .NET 綁定，選 Win/Linux/Mac 對應的 runtime -->
+    <PackageReference Include="OpenCvSharp4" Version="4.9.0.20240103" />
+    <PackageReference Include="OpenCvSharp4.runtime.win" Version="4.9.0.20240103" />
+    <!-- Linux 環境改用：OpenCvSharp4.runtime.ubuntu.22.04-x64 -->
+    <!-- Mac 環境改用：  OpenCvSharp4.runtime.osx -->
+  </ItemGroup>
+  <ItemGroup>
+    <None Update="images\**\*">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </None>
+  </ItemGroup>
+</Project>

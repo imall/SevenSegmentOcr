@@ -1,0 +1,24 @@
+Microsoft Visual Studio Solution File, Format Version 12.00
+# Visual Studio Version 17
+VisualStudioVersion = 17.5.2.0
+MinimumVisualStudioVersion = 10.0.40219.1
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "SevenSegmentOcr", "SevenSegmentOcr.csproj", "{36E5FD95-69C4-B613-21A3-1A5CEE6F8DC4}"
+EndProject
+Global
+	GlobalSection(SolutionConfigurationPlatforms) = preSolution
+		Debug|Any CPU = Debug|Any CPU
+		Release|Any CPU = Release|Any CPU
+	EndGlobalSection
+	GlobalSection(ProjectConfigurationPlatforms) = postSolution
+		{36E5FD95-69C4-B613-21A3-1A5CEE6F8DC4}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{36E5FD95-69C4-B613-21A3-1A5CEE6F8DC4}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{36E5FD95-69C4-B613-21A3-1A5CEE6F8DC4}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{36E5FD95-69C4-B613-21A3-1A5CEE6F8DC4}.Release|Any CPU.Build.0 = Release|Any CPU
+	EndGlobalSection
+	GlobalSection(SolutionProperties) = preSolution
+		HideSolutionNode = FALSE
+	EndGlobalSection
+	GlobalSection(ExtensibilityGlobals) = postSolution
+		SolutionGuid = {F98EC6D4-4401-491D-9716-1409D70AE4B3}
+	EndGlobalSection
+EndGlobal
