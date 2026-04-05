@@ -25,5 +25,6 @@ public record RoiDefinition(
     [property: JsonPropertyName("Y")]      int Y,
     [property: JsonPropertyName("Width")]  int Width,
     [property: JsonPropertyName("Height")] int Height,
-    [property: JsonPropertyName("DeviceType")] DeviceType DeviceType
+    [property: JsonPropertyName("DeviceType")] DeviceType DeviceType,
+    PreprocessorOptions? Options = null
 );

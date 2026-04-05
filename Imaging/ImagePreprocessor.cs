@@ -79,10 +79,18 @@ public class ImagePreprocessor(PreprocessorOptions? options = null) : IDisposabl
     private Mat ApplyMorphology(Mat binary)
     {
         var result = new Mat();
+        // using var kernel = Cv2.GetStructuringElement(
+        //     MorphShapes.Rect,
+        //     new Size(_options.MorphKernelSize, _options.MorphKernelSize));
+        int dynamicKernel = _options.MorphKernelSize > 0
+            ? _options.MorphKernelSize
+            : Math.Max(1, binary.Cols / 80);  // ← 這行是關鍵
+        
+        
         using var kernel = Cv2.GetStructuringElement(
             MorphShapes.Rect,
-            new Size(_options.MorphKernelSize, _options.MorphKernelSize));
-
+            new Size(dynamicKernel, dynamicKernel));
+        
         // Closing = 先膨脹後侵蝕，填補數字中間的縫隙，讓筆劃連續
         Cv2.MorphologyEx(binary, result, MorphTypes.Close, kernel);
         return result;
