@@ -3,153 +3,165 @@ using OpenCvSharp;
 namespace SevenSegmentOcr.Recognition;
 
 /// <summary>
-/// 從前處理後的二值圖中，找出每個數字字元的 bounding box。
-/// 使用連通區域分析，依 X 座標由左到右排序。
+/// 從前處理後的二值圖中，偵測每個字符的邊界框。
+/// 處理重點：過濾度符號「°」、小數點，以及分割「數字+C」合併的輪廓。
 /// </summary>
-public class DigitSegmenter(SegmenterOptions? options = null)
+public class DigitSegmenter
 {
-    private readonly SegmenterOptions _options = options ?? new SegmenterOptions();
+    /// <summary>
+    /// 輪廓面積下限（佔整圖面積的比例）。低於此值視為噪點。
+    /// </summary>
+    public double MinAreaRatio { get; set; } = 0.005;
 
     /// <summary>
-    /// 回傳由左到右的數字字元 bounding box 清單。
+    /// 輪廓面積上限（佔整圖面積的比例）。高於此值視為背景噪音。
     /// </summary>
-    public List<Rect> FindDigitBoxes(Mat processedImage)
+    public double MaxAreaRatio { get; set; } = 0.40;
+
+    /// <summary>
+    /// 字符高度下限（佔圖片高度的比例）。低於此值為小數點或度符號，直接捨棄。
+    /// </summary>
+    public double MinHeightRatio { get; set; } = 0.30;
+
+    /// <summary>
+    /// 若最後一個邊界框的寬度超過中位數寬度的此倍數，則嘗試切割。
+    /// </summary>
+    public double MergeSplitThreshold { get; set; } = 1.5;
+
+    /// <summary>
+    /// 垂直投影分析時，谷底值需低於峰值的此比例才認定為有效分割點。
+    /// </summary>
+    public double ValleyMaxRatio { get; set; } = 0.30;
+
+    /// <summary>
+    /// 找出所有字符的邊界框（由左至右排序），並嘗試分割合併的末尾輪廓。
+    /// </summary>
+    /// <param name="processedImage">前處理後的黑字白底二值圖</param>
+    /// <returns>字符邊界框清單（由左至右）</returns>
+    public List<Rect> FindCharBoxes(Mat processedImage)
     {
-        // 確保是黑字白底（黑色像素是前景）
-        using var binary = EnsureBlackOnWhite(processedImage);
+        int totalArea = processedImage.Rows * processedImage.Cols;
+        int minArea   = (int)(totalArea * MinAreaRatio);
+        int maxArea   = (int)(totalArea * MaxAreaRatio);
+        int minHeight = (int)(processedImage.Rows * MinHeightRatio);
 
-        // ← 加這步：確保是純二值圖再做連通區域分析
-        using var thresh = new Mat();
-        Cv2.Threshold(binary, thresh, 127, 255, ThresholdTypes.BinaryInv);
-        // BinaryInv：黑字（< 127）→ 白色前景（255），白底（> 127）→ 黑色背景（0）
-        // ConnectedComponents 以白色（255）為前景
-        
-        
-        // 連通區域分析
-        using var labels = new Mat();
-        using var stats  = new Mat();
-        using var cents  = new Mat();
-        var n = Cv2.ConnectedComponentsWithStats(thresh, labels, stats, cents);
+        // FindContours 需要黑底白字（物件為白色）；輸入是黑字白底，需先反轉
+        using var inverted = new Mat();
+        Cv2.BitwiseNot(processedImage, inverted);
 
-        var imgArea = thresh.Rows * thresh.Cols;
-        var minArea = (int)(imgArea * _options.MinAreaRatio);
-        var maxArea = (int)(imgArea * _options.MaxAreaRatio);
-        var minH    = (int)(thresh.Rows * _options.MinHeightRatio);
-        
-        // ── 暫時加這段 debug ──────────────────────────────────────
-        Console.WriteLine($"  圖片尺寸：{thresh.Cols}x{thresh.Rows}，總像素：{imgArea}");
-        Console.WriteLine($"  minArea={minArea} maxArea={maxArea} minH={minH}");
-        Console.WriteLine($"  找到 {n - 1} 個連通區域（不含背景）");
-        for (int i = 1; i < n; i++)
-        {
-            var x    = stats.At<int>(i, (int)ConnectedComponentsTypes.Left);
-            var y    = stats.At<int>(i, (int)ConnectedComponentsTypes.Top);
-            var w    = stats.At<int>(i, (int)ConnectedComponentsTypes.Width);
-            var h    = stats.At<int>(i, (int)ConnectedComponentsTypes.Height);
-            var area = stats.At<int>(i, (int)ConnectedComponentsTypes.Area);
-            double ratio = h > 0 ? (double)w / h : 0;
-            Console.WriteLine($"    [{i}] x={x} y={y} w={w} h={h} area={area} ratio={ratio:F2}");
-        }
-        // ──────────────────────────────────────────────────────────
+        Cv2.FindContours(inverted, out Point[][] contours, out _,
+            RetrievalModes.External, ContourApproximationModes.ApproxSimple);
 
         var boxes = new List<Rect>();
-
-        for (var i = 1; i < n; i++) // i=0 是背景
+        foreach (var contour in contours)
         {
-            var x  = stats.At<int>(i, (int)ConnectedComponentsTypes.Left);
-            var y  = stats.At<int>(i, (int)ConnectedComponentsTypes.Top);
-            var w  = stats.At<int>(i, (int)ConnectedComponentsTypes.Width);
-            var h  = stats.At<int>(i, (int)ConnectedComponentsTypes.Height);
-            var area = stats.At<int>(i, (int)ConnectedComponentsTypes.Area);
+            double area = Cv2.ContourArea(contour);
+            if (area < minArea || area > maxArea) continue;
 
-            if (area < minArea || area > maxArea) continue; // 過濾噪點和大片噪音
-            if (h < minH) continue;                         // 過濾 °、小數點（高度不足）
-            if (!IsDigitAspectRatio(w, h)) continue;        // 過濾 °C 的 C（太寬或太窄）
+            Rect box = Cv2.BoundingRect(contour);
+            if (box.Height < minHeight) continue;   // 過濾度符號「°」與小數點
 
-            boxes.Add(new Rect(x, y, w, h));
+            boxes.Add(box);
         }
 
-        // 依 X 座標排序（左 → 右）
+        // 由左至右排序
         boxes.Sort((a, b) => a.X.CompareTo(b.X));
 
-        // 合併距離太近的 box（避免一個數字被切成兩塊）
-        boxes = MergeOverlapping(boxes);
-        
-        // ← 加在這裡
-        if (boxes.Count > 3)
-            boxes = boxes.Take(3).ToList();
+        // 嘗試分割最後一個可能合併的邊界框（數字 + C 或 % 被合在一起）
+        boxes = TrySplitLastBox(processedImage, boxes);
 
         return boxes;
     }
 
-    /// <summary>
-    /// 裁切單一字元並 resize 成標準尺寸，方便後續分析或訓練。
-    /// </summary>
-    public Mat CropDigit(Mat processedImage, Rect box, int targetSize = 28)
+    // ── 合併框分割 ─────────────────────────────────────────────────────────
+
+    private List<Rect> TrySplitLastBox(Mat image, List<Rect> boxes)
     {
-        // 加一點 padding 避免切到邊
-        int pad = 4;
-        var padded = new Rect(
-            Math.Max(0, box.X - pad),
-            Math.Max(0, box.Y - pad),
-            Math.Min(processedImage.Cols - box.X + pad, box.Width  + pad * 2),
-            Math.Min(processedImage.Rows - box.Y + pad, box.Height + pad * 2));
+        if (boxes.Count < 2) return boxes;
 
-        using var cropped = new Mat(processedImage, padded);
-        var resized = new Mat();
-        Cv2.Resize(cropped, resized, new Size(targetSize, targetSize),
-            interpolation: InterpolationFlags.Area);
-        return resized;
-    }
+        int medianWidth = GetMedianWidth(boxes);
+        Rect last = boxes[^1];
 
-    // ── 私用輔助 ────────────────────────────────────────────────
+        if (last.Width <= medianWidth * MergeSplitThreshold)
+            return boxes;   // 寬度正常，不需切割
 
-    // 七段數字的長寬比大約在 0.4 ~ 1.2 之間
-    // °C 的 C 太寬（> 1.2），° 太小（高度過濾掉了）
-    // 1 很窄（< 0.4），但筆劃加上 padding 後通常 > 0.3，可以放寬
-    private bool IsDigitAspectRatio(int w, int h) =>
-        h > 0 && (double)w / h is >= 0.25 and <= 1.4;
+        var split = FindVerticalSplitPoint(image, last, medianWidth);
+        if (split is null) return boxes;
 
-    private static Mat EnsureBlackOnWhite(Mat src)
-    {
-        // 平均亮度 > 127 代表已是黑字白底，不需反轉
-        if (Cv2.Mean(src).Val0 > 127) return src.Clone();
-        var inv = new Mat();
-        Cv2.BitwiseNot(src, inv);
-        return inv;
+        int splitX = split.Value;
+        var leftBox  = new Rect(last.X,          last.Y, splitX,              last.Height);
+        var rightBox = new Rect(last.X + splitX,  last.Y, last.Width - splitX, last.Height);
+
+        boxes.RemoveAt(boxes.Count - 1);
+        boxes.Add(leftBox);
+        boxes.Add(rightBox);
+        return boxes;
     }
 
     /// <summary>
-    /// 合併 X 軸重疊或距離過近的 box（閾值：_options.MergeGapThreshold）
+    /// 對合併區域做垂直投影，找出右半部的最低谷（字符間隙）。
     /// </summary>
-    private List<Rect> MergeOverlapping(List<Rect> boxes)
+    private int? FindVerticalSplitPoint(Mat image, Rect merged, int medianWidth)
     {
-        if (boxes.Count == 0) return boxes;
+        // 裁出合併區域（黑字白底），轉成「暗像素計數」的投影
+        using var region = new Mat(image, merged);
+        using var invRegion = new Mat();
+        Cv2.BitwiseNot(region, invRegion);  // 轉白字黑底方便計數
 
-        var merged = new List<Rect> { boxes[0] };
+        int w = region.Cols;
+        int h = region.Rows;
 
-        for (int i = 1; i < boxes.Count; i++)
+        // 每列暗像素數量（= 反轉後的非零像素）
+        var projection = new int[w];
+        for (int x = 0; x < w; x++)
         {
-            var prev = merged[^1];
-            var curr = boxes[i];
+            using var col = invRegion.Col(x);
+            projection[x] = Cv2.CountNonZero(col);
+        }
 
-            int gap = curr.X - (prev.X + prev.Width);
+        // 平滑（3 列滑動平均）
+        var smoothed = SmoothProjection(projection);
 
-            if (gap <= _options.MergeGapThreshold)
+        // 在右側 40% 的範圍內搜尋谷底
+        int searchStart = (int)(w * 0.60);
+        int maxVal = smoothed.Max();
+        int threshold = (int)(maxVal * ValleyMaxRatio);
+
+        int valleyCol = -1;
+        int valleyVal = int.MaxValue;
+        for (int x = searchStart; x < w - 1; x++)
+        {
+            if (smoothed[x] < valleyVal)
             {
-                // 合併：取聯集
-                int x1 = Math.Min(prev.X, curr.X);
-                int y1 = Math.Min(prev.Y, curr.Y);
-                int x2 = Math.Max(prev.X + prev.Width,  curr.X + curr.Width);
-                int y2 = Math.Max(prev.Y + prev.Height, curr.Y + curr.Height);
-                merged[^1] = new Rect(x1, y1, x2 - x1, y2 - y1);
-            }
-            else
-            {
-                merged.Add(curr);
+                valleyVal = smoothed[x];
+                valleyCol = x;
             }
         }
 
-        return merged;
+        if (valleyCol < 0 || valleyVal > threshold)
+            return null;    // 沒有明顯的谷底，不切割
+
+        return valleyCol;
+    }
+
+    private static int[] SmoothProjection(int[] proj)
+    {
+        int n = proj.Length;
+        var result = new int[n];
+        for (int i = 0; i < n; i++)
+        {
+            int lo = Math.Max(0, i - 1);
+            int hi = Math.Min(n - 1, i + 1);
+            int sum = 0;
+            for (int j = lo; j <= hi; j++) sum += proj[j];
+            result[i] = sum / (hi - lo + 1);
+        }
+        return result;
+    }
+
+    private static int GetMedianWidth(List<Rect> boxes)
+    {
+        var widths = boxes.Select(b => b.Width).OrderBy(w => w).ToArray();
+        return widths[widths.Length / 2];
     }
 }

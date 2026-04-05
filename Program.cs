@@ -1,6 +1,7 @@
 using OpenCvSharp;
 using SevenSegmentOcr.Imaging;
 using SevenSegmentOcr.Models;
+using SevenSegmentOcr.Parsing;
 using SevenSegmentOcr.Recognition;
 
 // ════════════════════════════════════════════════════════════════
@@ -16,7 +17,7 @@ using SevenSegmentOcr.Recognition;
 //   4. 裁切 + 前處理 + 輸出
 // ════════════════════════════════════════════════════════════════
 
-var imagePath  = args.FirstOrDefault(a => !a.StartsWith("--")) ?? "./images/14.png";
+var imagePath  = args.FirstOrDefault(a => !a.StartsWith("--")) ?? "./images/21.png";
 var forceSelect = args.Contains("--select");
 const string configPath = "roi_config.json";
 const string outputDir  = @"D:\projects\ocr";
@@ -79,9 +80,10 @@ else
     Console.WriteLine("[提示] 可直接編輯 JSON 中的 DeviceType（Circular / Rectangular）\n");
 }
 
-// ── Step 4：裁切 + 前處理 + 儲存 ──────────────────────────────
+// ── Step 4：裁切 + 前處理 + 辨識 + 儲存 ───────────────────────
 var preprocessor = new ImagePreprocessor();
 var roiLoader    = new RoiLoader(expandPixels: 0);
+var decoder      = new SevenSegmentDecoder();
 
 foreach (var cfg in configs)
 {
@@ -90,29 +92,33 @@ foreach (var cfg in configs)
 
     using var processed = preprocessor.Process(roi);
 
+    // ── 辨識 ──────────────────────────────────────────────────
+    var charBoxes = decoder.DecodeWithBoxes(processed, cfg.DeviceType);
+    string rawText = string.Concat(charBoxes.Select(c => c.Character));
+    var ocrResult  = ValueParser.Parse(rawText);
+
+    // ── 除錯視覺化：在前處理圖上畫出邊界框與辨識字符 ────────
+    using var debugViz = processed.CvtColor(ColorConversionCodes.GRAY2BGR);
+    foreach (var (box, ch) in charBoxes)
+    {
+        Cv2.Rectangle(debugViz, box, new Scalar(0, 0, 220), 2);   // 紅框
+        Cv2.PutText(debugViz, ch.ToString(),
+            new Point(box.X, Math.Max(0, box.Y - 4)),
+            HersheyFonts.HersheySimplex, 0.8,
+            new Scalar(0, 180, 0), 2);                              // 綠字
+    }
+
+    // ── 儲存圖片 ──────────────────────────────────────────────
     var rawPath  = Path.Combine(outputDir, $"{cfg.Id}_raw.jpg");
     var procPath = Path.Combine(outputDir, $"{cfg.Id}_proc.jpg");
+    var segPath  = Path.Combine(outputDir, $"{cfg.Id}_seg.jpg");
     Cv2.ImWrite(rawPath,  roi);
     Cv2.ImWrite(procPath, processed);
-    
-    // ── DigitSegmenter 測試 ────────────────────────────────────
-    var segmenter = new DigitSegmenter();
-    var boxes = segmenter.FindDigitBoxes(processed);
-    Console.WriteLine($"  平均亮度：{Cv2.Mean(processed).Val0:F1}，切出 {boxes.Count} 個字元");
+    Cv2.ImWrite(segPath,  debugViz);
 
-    using var debugViz = processed.CvtColor(ColorConversionCodes.GRAY2BGR);
-    foreach (var (box, idx) in boxes.Select((b, i) => (b, i)))
-    {
-        Cv2.Rectangle(debugViz, box, Scalar.Red, 2);
-        Cv2.PutText(debugViz, idx.ToString(),
-            new Point(box.X, box.Y - 4),
-            HersheyFonts.HersheySimplex, 0.5, Scalar.Red, 1);
-    }
-    var vizPath = Path.Combine(outputDir, $"{cfg.Id}_seg.jpg");
-    Cv2.ImWrite(vizPath, debugViz);
-    // ──────────────────────────────────────────────────────────
-
-    // Console.WriteLine($"id={cfg.Id:D2} [{cfg.DeviceType,-11}] → {Path.GetFileName(procPath)}");
+    // ── 輸出結果 ──────────────────────────────────────────────
+    string statusIcon = ocrResult.Success ? "✓" : "✗";
+    Console.WriteLine($"id={cfg.Id:D2} [{cfg.DeviceType,-11}] raw='{rawText}' {statusIcon} {ocrResult.Message}");
 }
 
 Console.WriteLine($"\n完成，請檢查：{Path.GetFullPath(outputDir)}");

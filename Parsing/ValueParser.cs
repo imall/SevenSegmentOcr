@@ -10,6 +10,19 @@ public static class ValueParser
 {
     private static readonly Regex DigitsOnly = new(@"[^0-9.]", RegexOptions.Compiled);
 
+    /// <summary>
+    /// 從解碼器輸出的原始字串自動判斷溫度或濕度，再呼叫有型別版本。
+    /// 結尾為 'C' → 溫度；結尾為 '%' → 濕度；其他 → 預設溫度。
+    /// </summary>
+    public static OcrResult Parse(string rawText)
+    {
+        var t = rawText.TrimEnd();
+        var valueType = t.EndsWith('C') ? DisplayValueType.Temperature
+                      : t.EndsWith('%') ? DisplayValueType.Humidity
+                      : DisplayValueType.Temperature;
+        return Parse(rawText, valueType);
+    }
+
     public static OcrResult Parse(string rawText, DisplayValueType valueType)
     {
         // 1. 只保留數字和小數點
