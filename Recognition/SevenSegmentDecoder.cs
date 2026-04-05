@@ -25,7 +25,6 @@ public class SevenSegmentDecoder
 
     /// <summary>
     /// 從前處理後的二值圖中辨識所有字符，回傳原始字串。
-    /// 例如：「25.8C」、「56.4」、「65%」
     /// </summary>
     public string Decode(Mat processedImage, DeviceType deviceType)
     {
@@ -42,31 +41,110 @@ public class SevenSegmentDecoder
         if (boxes.Count == 0) return [];
 
         var result = new List<(Rect, char)>();
-
-        // 決定小數點：找最小的輪廓，若符合「近似正方形且矮小」則當小數點
         var dotBox = FindDecimalDot(processedImage, boxes);
 
-        // 辨識每個邊界框
         for (int i = 0; i < boxes.Count; i++)
         {
             Rect box = boxes[i];
 
-            // 插入小數點（若此框左側緊接著小數點位置）
-            if (dotBox.HasValue && result.Count > 0 && ShouldInsertDotBefore(dotBox.Value, box, result[^1].Item1))
+            if (dotBox.HasValue && result.Count > 0
+                && ShouldInsertDotBefore(dotBox.Value, box, result[^1].Item1))
             {
                 result.Add((dotBox.Value, '.'));
-                dotBox = null;  // 只插入一次
+                dotBox = null;
             }
 
             using var charMat = new Mat(processedImage, box);
-            char ch = RecognizeChar(charMat);
+        
+            // ★ 最後一個框且是圓形裝置，優先嘗試辨識 C
+            bool isLastBox = (i == boxes.Count - 1);
+            char ch = (isLastBox && deviceType == DeviceType.Circular)
+                ? RecognizeLastCharCircular(charMat)
+                : RecognizeChar(charMat);
+            
             result.Add((box, ch));
         }
 
-        // 若小數點還沒插入（在最後一個字符後面，不太可能，但防呆）
-        // 在這裡不插入，因為小數點不會出現在末尾
+        result = deviceType == DeviceType.Rectangular
+            ? PostProcessRectangular(result)
+            : PostProcessCircular(result);
 
         return result;
+    }
+    
+    /// <summary>
+    /// 圓形裝置最後一個框的辨識：C 或 % 優先判斷。
+    /// 最後一個框若不像數字，直接判斷是 C 還是 %。
+    /// </summary>
+    private char RecognizeLastCharCircular(Mat charMat)
+    {
+        int w = charMat.Cols;
+        int h = charMat.Rows;
+
+        bool a = SampleSegment(charMat, SegRect(0.20, 0.02, 0.60, 0.12, w, h));
+        bool b = SampleSegment(charMat, SegRect(0.68, 0.08, 0.22, 0.33, w, h));
+        bool c = SampleSegment(charMat, SegRect(0.68, 0.55, 0.22, 0.33, w, h));
+        bool d = SampleSegment(charMat, SegRect(0.20, 0.86, 0.60, 0.12, w, h));
+        bool e = SampleSegment(charMat, SegRect(0.08, 0.55, 0.22, 0.33, w, h));
+        bool f = SampleSegment(charMat, SegRect(0.08, 0.08, 0.22, 0.33, w, h));
+        bool g = SampleSegment(charMat, SegRect(0.20, 0.44, 0.60, 0.12, w, h));
+        Console.WriteLine($"  w={w} h={h} ar={(double)w/h:F2} | a={a} b={b} c={c} d={d} e={e} f={f} g={g}");
+
+        double ar = (double)w / h;
+
+        // C 的唯一可靠特徵：無右上豎(b)，且有左側筆劃(f 或 e)
+        // ° 的污染會讓 c/g 誤判，但不會影響 b（° 在右上角但面積小）
+        if (!b && (f || e))
+            return 'C';
+
+        // % 的特徵：有中橫(g)，無右上豎(b)，無右下豎(c)
+        if (!b && !c && g)
+            return '%';
+
+        // 回退到一般辨識
+        return RecognizeChar(charMat);
+    }
+
+    // ── 後處理 ───────────────────────────────────────────────────────────────
+
+    /// <summary>
+    /// 長型裝置：永遠只顯示溫度，只保留數字和小數點。
+    /// 用中位數寬高過濾異常框（°C 合併框、° 殘留等）。
+    /// </summary>
+    private static List<(Rect, char)> PostProcessRectangular(List<(Rect Box, char Character)> chars)
+    {
+        if (chars.Count == 0) return chars;
+
+        var sortedWidths  = chars.Select(c => c.Box.Width).OrderBy(w => w).ToArray();
+        var sortedHeights = chars.Select(c => c.Box.Height).OrderBy(h => h).ToArray();
+        double medianW = sortedWidths[sortedWidths.Length / 2];
+        double medianH = sortedHeights[sortedHeights.Length / 2];
+
+        return chars
+            .Where(c => c.Box.Width  <= medianW * 1.6
+                     && c.Box.Height >= medianH * 0.5
+                     && (char.IsDigit(c.Character) || c.Character == '.'))
+            .ToList();
+    }
+
+    /// <summary>
+    /// 圓形裝置：需要保留末尾的 C 或 % 來判斷溫度/濕度類型。
+    /// 用中位數寬高過濾異常框，但保留合法的 C / % / 數字 / 小數點。
+    /// </summary>
+    private static List<(Rect, char)> PostProcessCircular(List<(Rect Box, char Character)> chars)
+    {
+        if (chars.Count == 0) return chars;
+
+        var sortedWidths  = chars.Select(c => c.Box.Width).OrderBy(w => w).ToArray();
+        var sortedHeights = chars.Select(c => c.Box.Height).OrderBy(h => h).ToArray();
+        double medianW = sortedWidths[sortedWidths.Length / 2];
+        double medianH = sortedHeights[sortedHeights.Length / 2];
+
+        return chars
+            .Where(c => c.Box.Width  <= medianW * 1.6
+                     && c.Box.Height >= medianH * 0.5
+                     && (char.IsDigit(c.Character) || c.Character is '.' or 'C' or '%' or '-'))
+            .ToList();
     }
 
     // ── 段位辨識核心 ─────────────────────────────────────────────────────────
@@ -79,16 +157,31 @@ public class SevenSegmentDecoder
         int w = charMat.Cols;
         int h = charMat.Rows;
 
-        // 七個段位的取樣矩形（比例定義，配合黑字白底）
-        bool a = SampleSegment(charMat, SegRect(0.10, 0.00, 0.80, 0.14, w, h)); // 頂橫
-        bool b = SampleSegment(charMat, SegRect(0.65, 0.10, 0.25, 0.35, w, h)); // 右上豎
-        bool c = SampleSegment(charMat, SegRect(0.65, 0.55, 0.25, 0.35, w, h)); // 右下豎
-        bool d = SampleSegment(charMat, SegRect(0.10, 0.86, 0.80, 0.14, w, h)); // 底橫
-        bool e = SampleSegment(charMat, SegRect(0.10, 0.55, 0.25, 0.35, w, h)); // 左下豎
-        bool f = SampleSegment(charMat, SegRect(0.10, 0.10, 0.25, 0.35, w, h)); // 左上豎
-        bool g = SampleSegment(charMat, SegRect(0.10, 0.43, 0.80, 0.14, w, h)); // 中橫
+        bool a = SampleSegment(charMat, SegRect(0.20, 0.02, 0.60, 0.12, w, h)); // 頂橫
+        bool b = SampleSegment(charMat, SegRect(0.68, 0.08, 0.22, 0.33, w, h)); // 右上豎
+        bool c = SampleSegment(charMat, SegRect(0.68, 0.55, 0.22, 0.33, w, h)); // 右下豎
+        bool d = SampleSegment(charMat, SegRect(0.20, 0.86, 0.60, 0.12, w, h)); // 底橫
+        bool e = SampleSegment(charMat, SegRect(0.08, 0.55, 0.22, 0.33, w, h)); // 左下豎
+        bool f = SampleSegment(charMat, SegRect(0.08, 0.08, 0.22, 0.33, w, h)); // 左上豎
+        bool g = SampleSegment(charMat, SegRect(0.20, 0.44, 0.60, 0.12, w, h)); // 中橫
+        Console.WriteLine($"  w={w} h={h} ar={(double)w/h:F2} | a={a} b={b} c={c} d={d} e={e} f={f} g={g}");
 
-        return LookupPattern(a, b, c, d, e, f, g);
+        char result = LookupPattern(a, b, c, d, e, f, g);
+
+        double ar = (double)w / h;
+
+        if (!c && !g && d && e && ar < 1.0)
+            return 'C';
+
+        // 4：有右上、右下、左上、中橫，無底橫、無左下
+        if (result == '?' && b && c && f && g && !d && !e)
+            return '4';
+
+        // 7：有頂橫、右上、右下，無左側段、無中橫，寬高比 < 0.6
+        if (result == '?' && a && b && !e && !f && !g && ar < 0.6)
+            return '7';
+
+        return result;
     }
 
     /// <summary>
@@ -96,7 +189,6 @@ public class SevenSegmentDecoder
     /// </summary>
     private bool SampleSegment(Mat image, Rect zone)
     {
-        // 防止取樣區域超出圖片邊界
         int x = Math.Max(0, zone.X);
         int y = Math.Max(0, zone.Y);
         int w = Math.Min(zone.Width,  image.Cols - x);
@@ -104,10 +196,7 @@ public class SevenSegmentDecoder
         if (w <= 0 || h <= 0) return false;
 
         using var region = new Mat(image, new Rect(x, y, w, h));
-
-        // 黑字白底：暗像素 = 接近 0 的像素
-        // 將影像反轉後計算非零像素數即為暗像素數
-        using var inv = new Mat();
+        using var inv    = new Mat();
         Cv2.BitwiseNot(region, inv);
         int darkPixels = Cv2.CountNonZero(inv);
         double ratio = (double)darkPixels / (w * h);
@@ -120,8 +209,6 @@ public class SevenSegmentDecoder
 
     // ── 辨識表 ──────────────────────────────────────────────────────────────
     //
-    //  段位編號：a=頂橫, b=右上豎, c=右下豎, d=底橫, e=左下豎, f=左上豎, g=中橫
-    //
     //    aaa
     //   f   b
     //   f   b
@@ -132,47 +219,41 @@ public class SevenSegmentDecoder
     //
     private static char LookupPattern(bool a, bool b, bool c, bool d, bool e, bool f, bool g)
     {
-        // 將 7 個 bool 打包成 byte 方便比對
-        // 位元順序：a b c d e f g（MSB 到 LSB，bit 6 → bit 0）
         int pat = (a ? 64 : 0) | (b ? 32 : 0) | (c ? 16 : 0)
                 | (d ?  8 : 0) | (e ?  4 : 0) | (f ?  2 : 0) | (g ? 1 : 0);
 
         return pat switch
         {
-            // abcdefg
-            0b1110111 => '0',   // a b c d e f . (g=off)
-            0b0010010 => '1',   // . b c . . . .
-            0b1101101 => '2',   // a b . d e . g
-            0b1111001 => '3',   // a b c d . . g
-            0b0011011 => '4',   // . b c . . f g
-            0b1011011 => '5',   // a . c d . f g    ← 注意：5 的 e=OFF
-            0b1011111 => '6',   // a . c d e f g
-            0b1110010 => '7',   // a b c . . . .
-            0b1111111 => '8',   // a b c d e f g
-            0b1111011 => '9',   // a b c d . f g
-            // C：頂橫+左上豎+左下豎+底橫，無右側、無中橫
-            0b1001110 => 'C',   // a . . d e f .
-            // 負號：只有中橫
+            0b1111110 => '0',
+            0b0110000 => '1',
+            0b1101101 => '2',
+            0b1100101 => '2',   // 實測：c=F d=F，右下豎沒取到
+            0b1111001 => '3',
+            0b0110011 => '4',
+            0b0110111 => '4',   // 實測：d=T，底橫誤判
+            0b1011011 => '5',
+            0b1011111 => '6',
+            0b1010111 => '6',   // 實測：d=F，底橫沒取到
+            0b1110000 => '7',
+            0b1110010 => '7',
+            0b1111111 => '8',
+            0b1111011 => '9',
+            0b1001110 => 'C',
+            0b1101110 => 'C',   // 實測：b=T，右上豎誤判
             0b0000001 => '-',
-            // 全滅可能是空格
             0b0000000 => ' ',
-            // 無法匹配
             _ => '?'
         };
     }
 
     // ── 小數點處理 ───────────────────────────────────────────────────────────
 
-    /// <summary>
-    /// 從原始圖片中找小數點的位置。
-    /// 小數點特徵：面積很小、接近正方形、位於字符列表之間的 Y 軸下方。
-    /// </summary>
     private static Rect? FindDecimalDot(Mat image, List<Rect> charBoxes)
     {
         if (charBoxes.Count == 0) return null;
 
-        int totalArea = image.Rows * image.Cols;
-        int maxDotArea = (int)(totalArea * 0.003);  // 小數點面積上限 0.3%
+        int totalArea  = image.Rows * image.Cols;
+        int maxDotArea = (int)(totalArea * 0.003);
 
         using var inverted = new Mat();
         Cv2.BitwiseNot(image, inverted);
@@ -191,14 +272,11 @@ public class SevenSegmentDecoder
 
             Rect box = Cv2.BoundingRect(contour);
 
-            // 必須在字符列表的 X 範圍內
             if (box.X < charMinX || box.Right > charMaxX) continue;
 
-            // 近似正方形
             double ratio = (double)box.Width / box.Height;
             if (ratio < 0.4 || ratio > 2.5) continue;
 
-            // 位於字符下半部（y > 字符起點 + 字符高度的 50%）
             if (box.Y < charMinY + charAvgH * 0.5) continue;
 
             return box;
@@ -208,7 +286,6 @@ public class SevenSegmentDecoder
 
     private static bool ShouldInsertDotBefore(Rect dot, Rect currentBox, Rect prevBox)
     {
-        // 小數點的 X 中心在前一個字符和當前字符之間
         int dotCenterX = dot.X + dot.Width / 2;
         return dotCenterX > prevBox.Right && dotCenterX < currentBox.X + currentBox.Width / 2;
     }

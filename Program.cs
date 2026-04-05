@@ -93,32 +93,34 @@ foreach (var cfg in configs)
     using var processed = preprocessor.Process(roi);
 
     // ── 辨識 ──────────────────────────────────────────────────
-    var charBoxes = decoder.DecodeWithBoxes(processed, cfg.DeviceType);
-    string rawText = string.Concat(charBoxes.Select(c => c.Character));
-    var ocrResult  = ValueParser.Parse(rawText);
-
-    // ── 除錯視覺化：在前處理圖上畫出邊界框與辨識字符 ────────
-    using var debugViz = processed.CvtColor(ColorConversionCodes.GRAY2BGR);
-    foreach (var (box, ch) in charBoxes)
-    {
-        Cv2.Rectangle(debugViz, box, new Scalar(0, 0, 220), 2);   // 紅框
-        Cv2.PutText(debugViz, ch.ToString(),
-            new Point(box.X, Math.Max(0, box.Y - 4)),
-            HersheyFonts.HersheySimplex, 0.8,
-            new Scalar(0, 180, 0), 2);                              // 綠字
-    }
+    // var charBoxes = decoder.DecodeWithBoxes(processed, cfg.DeviceType);
+    // string rawText = string.Concat(charBoxes.Select(c => c.Character));
+    // var ocrResult = cfg.DeviceType == DeviceType.Rectangular
+    //     ? ValueParser.Parse(rawText, DisplayValueType.Temperature)
+    //     : ValueParser.Parse(rawText);
+    //
+    // // ── 除錯視覺化：在前處理圖上畫出邊界框與辨識字符 ────────
+    // using var debugViz = processed.CvtColor(ColorConversionCodes.GRAY2BGR);
+    // foreach (var (box, ch) in charBoxes)
+    // {
+    //     Cv2.Rectangle(debugViz, box, new Scalar(0, 0, 220), 2);   // 紅框
+    //     Cv2.PutText(debugViz, ch.ToString(),
+    //         new Point(box.X, Math.Max(0, box.Y - 4)),
+    //         HersheyFonts.HersheySimplex, 0.8,
+    //         new Scalar(0, 180, 0), 2);                              // 綠字
+    // }
 
     // ── 儲存圖片 ──────────────────────────────────────────────
     var rawPath  = Path.Combine(outputDir, $"{cfg.Id}_raw.jpg");
     var procPath = Path.Combine(outputDir, $"{cfg.Id}_proc.jpg");
     var segPath  = Path.Combine(outputDir, $"{cfg.Id}_seg.jpg");
-    Cv2.ImWrite(rawPath,  roi);
+    // Cv2.ImWrite(rawPath,  roi);
     Cv2.ImWrite(procPath, processed);
-    Cv2.ImWrite(segPath,  debugViz);
+    // Cv2.ImWrite(segPath,  debugViz);
 
     // ── 輸出結果 ──────────────────────────────────────────────
-    string statusIcon = ocrResult.Success ? "✓" : "✗";
-    Console.WriteLine($"id={cfg.Id:D2} [{cfg.DeviceType,-11}] raw='{rawText}' {statusIcon} {ocrResult.Message}");
+    // string statusIcon = ocrResult.Success ? "✓" : "✗";
+    // Console.WriteLine($"id={cfg.Id:D2} [{cfg.DeviceType,-11}] raw='{rawText}' {statusIcon} {ocrResult.Message}");
 }
 
 Console.WriteLine($"\n完成，請檢查：{Path.GetFullPath(outputDir)}");

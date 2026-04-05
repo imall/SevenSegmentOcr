@@ -31,7 +31,7 @@ public class DigitSegmenter
     /// <summary>
     /// 垂直投影分析時，谷底值需低於峰值的此比例才認定為有效分割點。
     /// </summary>
-    public double ValleyMaxRatio { get; set; } = 0.30;
+    public double ValleyMaxRatio { get; set; } = 0.40;
 
     /// <summary>
     /// 找出所有字符的邊界框（由左至右排序），並嘗試分割合併的末尾輪廓。
@@ -66,52 +66,118 @@ public class DigitSegmenter
 
         // 由左至右排序
         boxes.Sort((a, b) => a.X.CompareTo(b.X));
-
-        // 嘗試分割最後一個可能合併的邊界框（數字 + C 或 % 被合在一起）
-        boxes = TrySplitLastBox(processedImage, boxes);
+        boxes = MergeVerticallyAdjacentBoxes(boxes, processedImage);
+        boxes = TrySplitWideBoxes(processedImage, boxes);
 
         return boxes;
     }
-
-    // ── 合併框分割 ─────────────────────────────────────────────────────────
-
-    private List<Rect> TrySplitLastBox(Mat image, List<Rect> boxes)
+    
+    
+    /// <summary>
+    /// 合併 X 軸大幅重疊且垂直相鄰的框（同一個數字被斷成兩段）
+    /// </summary>
+    private static List<Rect> MergeVerticallyAdjacentBoxes(List<Rect> boxes, Mat image)
     {
         if (boxes.Count < 2) return boxes;
+    
+        bool merged = true;
+        while (merged)
+        {
+            merged = false;
+            for (int i = 0; i < boxes.Count - 1; i++)
+            {
+                for (int j = i + 1; j < boxes.Count; j++)
+                {
+                    var a = boxes[i];
+                    var b = boxes[j];
 
-        int medianWidth = GetMedianWidth(boxes);
-        Rect last = boxes[^1];
+                    // X 軸重疊程度（重疊寬度 / 較小框的寬度）
+                    int overlapX = Math.Min(a.Right, b.Right) - Math.Max(a.X, b.X);
+                    int minW = Math.Min(a.Width, b.Width);
+                    if (overlapX < minW * 0.5) continue; // X 軸重疊不足 50%，跳過
 
-        if (last.Width <= medianWidth * MergeSplitThreshold)
-            return boxes;   // 寬度正常，不需切割
+                    // 垂直間距（兩框之間的空隙）
+                    int gap = Math.Max(a.Y, b.Y) - Math.Min(a.Bottom, b.Bottom);
+                    int avgH = (a.Height + b.Height) / 2;
+                    if (gap > avgH * 0.3) continue; // 間距太大，不合併
 
-        var split = FindVerticalSplitPoint(image, last, medianWidth);
-        if (split is null) return boxes;
-
-        int splitX = split.Value;
-        var leftBox  = new Rect(last.X,          last.Y, splitX,              last.Height);
-        var rightBox = new Rect(last.X + splitX,  last.Y, last.Width - splitX, last.Height);
-
-        boxes.RemoveAt(boxes.Count - 1);
-        boxes.Add(leftBox);
-        boxes.Add(rightBox);
+                    // 合併
+                    int x = Math.Min(a.X, b.X);
+                    int y = Math.Min(a.Y, b.Y);
+                    int right = Math.Max(a.Right, b.Right);
+                    int bottom = Math.Max(a.Bottom, b.Bottom);
+                    boxes[i] = new Rect(x, y, right - x, bottom - y);
+                    boxes.RemoveAt(j);
+                    merged = true;
+                    break;
+                }
+                if (merged) break;
+            }
+        }
         return boxes;
     }
 
-    /// <summary>
-    /// 對合併區域做垂直投影，找出右半部的最低谷（字符間隙）。
-    /// </summary>
-    private int? FindVerticalSplitPoint(Mat image, Rect merged, int medianWidth)
+    // ── 改成處理所有過寬的框 ──────────────────────────────────────────────
+    private List<Rect> TrySplitWideBoxes(Mat image, List<Rect> boxes)
     {
-        // 裁出合併區域（黑字白底），轉成「暗像素計數」的投影
+        if (boxes.Count == 0) return boxes;
+
+        int medianWidth = GetMedianWidth(boxes);
+        var result = new List<Rect>();
+
+        foreach (var box in boxes)
+        {
+            if (box.Width > medianWidth * MergeSplitThreshold)
+            {
+                var parts = SplitBox(image, box, medianWidth);
+                result.AddRange(parts);
+            }
+            else
+            {
+                result.Add(box);
+            }
+        }
+
+        result.Sort((a, b) => a.X.CompareTo(b.X));
+        return result;
+    }
+    
+    private List<Rect> SplitBox(Mat image, Rect box, int targetWidth)
+    {
+        // 嘗試在此框內找垂直分割點（可能有多個）
+        var splitPoints = FindAllSplitPoints(image, box, targetWidth);
+
+        if (splitPoints.Count == 0)
+            return [box];
+
+        // 依分割點切開
+        var parts = new List<Rect>();
+        int prevX = 0;
+        foreach (int sp in splitPoints)
+        {
+            parts.Add(new Rect(box.X + prevX, box.Y, sp - prevX, box.Height));
+            prevX = sp;
+        }
+        parts.Add(new Rect(box.X + prevX, box.Y, box.Width - prevX, box.Height));
+
+        // ★ 過濾掉切出來太細的碎片（可能是 °C 的 ° 殘留）
+        parts = parts.Where(p => p.Width > targetWidth * 0.25).ToList();
+
+        return parts.Count > 0 ? parts : [box];
+    }
+    
+    
+    /// <summary>
+    /// 對合併框做垂直投影，找出所有谷底（支援多個分割點）
+    /// </summary>
+    private List<int> FindAllSplitPoints(Mat image, Rect merged, int targetWidth)
+    {
         using var region = new Mat(image, merged);
         using var invRegion = new Mat();
-        Cv2.BitwiseNot(region, invRegion);  // 轉白字黑底方便計數
+        Cv2.BitwiseNot(region, invRegion);
 
         int w = region.Cols;
-        int h = region.Rows;
 
-        // 每列暗像素數量（= 反轉後的非零像素）
         var projection = new int[w];
         for (int x = 0; x < w; x++)
         {
@@ -119,39 +185,38 @@ public class DigitSegmenter
             projection[x] = Cv2.CountNonZero(col);
         }
 
-        // 平滑（3 列滑動平均）
         var smoothed = SmoothProjection(projection);
-
-        // 在右側 40% 的範圍內搜尋谷底
-        int searchStart = (int)(w * 0.60);
         int maxVal = smoothed.Max();
         int threshold = (int)(maxVal * ValleyMaxRatio);
 
-        int valleyCol = -1;
-        int valleyVal = int.MaxValue;
-        for (int x = searchStart; x < w - 1; x++)
+        // 找所有局部最小值（谷底），且谷底值 < threshold
+        var valleys = new List<int>();
+        // 最少要過了第一個字符寬度才開始找
+        int searchStart = (int)(targetWidth * 0.5);
+
+        for (int x = searchStart + 1; x < w - 1; x++)
         {
-            if (smoothed[x] < valleyVal)
+            if (smoothed[x] < smoothed[x - 1] && smoothed[x] < smoothed[x + 1]
+                && smoothed[x] <= threshold)
             {
-                valleyVal = smoothed[x];
-                valleyCol = x;
+                // 避免兩個谷底太近（至少間隔 targetWidth * 0.4）
+                if (valleys.Count == 0 || x - valleys[^1] > targetWidth * 0.4)
+                    valleys.Add(x);
             }
         }
 
-        if (valleyCol < 0 || valleyVal > threshold)
-            return null;    // 沒有明顯的谷底，不切割
-
-        return valleyCol;
+        return valleys;
     }
 
     private static int[] SmoothProjection(int[] proj)
     {
         int n = proj.Length;
         var result = new int[n];
+        // 用較大的視窗（5點）讓谷底更明顯
         for (int i = 0; i < n; i++)
         {
-            int lo = Math.Max(0, i - 1);
-            int hi = Math.Min(n - 1, i + 1);
+            int lo = Math.Max(0, i - 2);
+            int hi = Math.Min(n - 1, i + 2);
             int sum = 0;
             for (int j = lo; j <= hi; j++) sum += proj[j];
             result[i] = sum / (hi - lo + 1);
