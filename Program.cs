@@ -16,7 +16,7 @@ Directory.CreateDirectory(outputDir);
 
 var imageConfigs = new[]
 {
-    // new ImageConfig(Path.Combine(imagesDir, "1.png"), Path.Combine(configsDir, "1.json")),
+    new ImageConfig(Path.Combine(imagesDir, "1.png"), Path.Combine(configsDir, "1.json")),
     // new ImageConfig(Path.Combine(imagesDir, "2.png"), Path.Combine(configsDir, "2.json")),
     // new ImageConfig(Path.Combine(imagesDir, "3.png"), Path.Combine(configsDir, "3.json")),
     // new ImageConfig(Path.Combine(imagesDir, "5.png"), Path.Combine(configsDir, "5.json")),
@@ -30,7 +30,7 @@ var imageConfigs = new[]
     // new ImageConfig(Path.Combine(imagesDir, "13.png"), Path.Combine(configsDir, "13.json")),
     // new ImageConfig(Path.Combine(imagesDir, "14.png"), Path.Combine(configsDir, "14.json")),
     // new ImageConfig(Path.Combine(imagesDir, "15.png"), Path.Combine(configsDir, "15.json")),
-    new ImageConfig(Path.Combine(imagesDir, "16.png"), Path.Combine(configsDir, "16.json")),
+    // new ImageConfig(Path.Combine(imagesDir, "16.png"), Path.Combine(configsDir, "16.json")),
     // new ImageConfig(Path.Combine(imagesDir, "17.png"), Path.Combine(configsDir, "17.json")),
     // new ImageConfig(Path.Combine(imagesDir, "18.png"), Path.Combine(configsDir, "18.json")),
     // new ImageConfig(Path.Combine(imagesDir, "19.png"), Path.Combine(configsDir, "19.json")),
@@ -230,7 +230,13 @@ static (string? Value, string? Unit, string? Error) PostProcess(string raw, Devi
 
     // Step 4：長型裝置直接回傳溫度
     if (deviceType == DeviceType.Rectangular)
-        return (cleaned, "°C", null);
+    {
+        // 如果小數點後超過一位，無條件捨去
+        if (firstDot < 0) return (cleaned, "°C", null);
+        
+        var truncated = cleaned[..Math.Min(firstDot + 2, cleaned.Length)];
+        return (truncated, "°C", null);
+    }
 
     // Step 5：圓形裝置判斷溫度或濕度
     // 小數點後有第二位數字（例如 25.36 → 小數後兩位）→ 溫度
