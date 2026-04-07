@@ -5,6 +5,9 @@ using System.Text.Json;
 using System.Text.Json.Serialization;
 using Tesseract;
 
+var projectRoot = GetProjectRoot();
+var configsDir  = Path.Combine(projectRoot, "configs");
+var imagesDir   = Path.Combine(projectRoot, "images");
 const string outputDir = @"D:\projects\ocr";
 const string tessData  = "./Tessdata";
 const bool   runOcr    = true;
@@ -13,7 +16,12 @@ Directory.CreateDirectory(outputDir);
 
 var imageConfigs = new[]
 {
-    new ImageConfig(ImagePath: "./images/2.png", ConfigPath: "./configs/2.json"),
+    new ImageConfig(
+        ImagePath:  Path.Combine(imagesDir,  "1.png"),
+        ConfigPath: Path.Combine(configsDir, "1.json")),
+    new ImageConfig(
+        ImagePath:  Path.Combine(imagesDir,  "2.png"),
+        ConfigPath: Path.Combine(configsDir, "2.json")),
 };
 
 var roiLoader  = new RoiLoader(expandPixels: 0);
@@ -214,4 +222,11 @@ static RoiDefinition[] PromptDeviceTypes(RoiDefinition[] rois)
     return result.ToArray();
 }
 
+static string GetProjectRoot()
+{
+    var baseDir = AppContext.BaseDirectory; // bin/Debug/net8.0/
+    return Path.GetFullPath(Path.Combine(baseDir, "..", "..", ".."));
+}
+
 record ImageConfig(string ImagePath, string? ConfigPath = null);
+
