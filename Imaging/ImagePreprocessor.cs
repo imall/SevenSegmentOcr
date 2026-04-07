@@ -16,10 +16,11 @@ public class ImagePreprocessor(PreprocessorOptions? options = null) : IDisposabl
     public Mat Process(Mat input)
     {
         using var gray     = ToGrayscale(input);
-        using var cropped  = CropEdgeBands(gray);   // ← 加這行
+        using var cropped  = CropEdgeBands(gray); 
         using var resized  = Upscale(cropped);
         using var blurred  = SmoothStrokes(resized);
-        using var binary   = Binarize(blurred);
+        using var equalized = EqualizeLocal(blurred); 
+        using var binary   = Binarize(equalized); 
         using var morphed  = ApplyMorphology(binary);
         var padded         = AddPadding(morphed);
         return EnsureBlackOnWhite(padded);
@@ -61,20 +62,42 @@ public class ImagePreprocessor(PreprocessorOptions? options = null) : IDisposabl
         return blurred;
     }
 
+    private static Mat EqualizeLocal(Mat src)
+    {
+        var result = new Mat();
+        using var clahe = Cv2.CreateCLAHE(clipLimit: 2.0, tileGridSize: new Size(8, 8));
+        clahe.Apply(src, result);
+        return result;
+    }
+    
     // ── Step 5：OTSU 自適應二值化 ─────────────────────────────────
     private static Mat Binarize(Mat src)
     {
         var binary = new Mat();
-        double otsuThresh = Cv2.Threshold(src, binary, 0, 255,
+
+        // 先試 Otsu，檢查閾值是否合理
+        var otsuTest = new Mat();
+        double otsuThresh = Cv2.Threshold(src, otsuTest, 0, 255,
             ThresholdTypes.Otsu | ThresholdTypes.Binary);
 
-        // 如果 OTSU 算出來的閾值太極端，改用固定值
-        if (otsuThresh < 30 || otsuThresh > 220)
-            Cv2.Threshold(src, binary, 127, 255, ThresholdTypes.Binary);
+        if (otsuThresh >= 30 && otsuThresh <= 220)
+        {
+            // Otsu 結果合理，直接用
+            return otsuTest;
+        }
+        otsuTest.Dispose();
 
+        // ✅ Otsu 失效時，改用自適應閾值（對每個局部區域獨立計算）
+        Cv2.AdaptiveThreshold(
+            src, binary,
+            maxValue: 255,
+            adaptiveMethod: AdaptiveThresholdTypes.GaussianC,
+            thresholdType: ThresholdTypes.Binary,
+            blockSize: 31,   // 視字體大小調整，通常是字高的 1~2 倍（奇數）
+            c: 10            // 從均值再往下扣的常數，數字越大越激進
+        );
         return binary;
     }
-
     // ── Step 6：形態學處理（補焊斷開的七段筆劃）─────────────────
     private Mat ApplyMorphology(Mat binary)
     {
