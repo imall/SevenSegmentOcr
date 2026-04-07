@@ -13,7 +13,7 @@
     "X": 1768,
     "Y": 445,
     "Width": 266,
-    "Height": 124,
+    "Height": 130,
     "DeviceType": "Circular",
     "Options": null
   },
@@ -67,7 +67,7 @@
     "X": 3236,
     "Y": 1534,
     "Width": 220,
-    "Height": 162,
+    "Height": 150,
     "DeviceType": "Rectangular",
     "Options": null
   },
@@ -103,7 +103,7 @@
     "X": 3204,
     "Y": 2678,
     "Width": 254,
-    "Height": 116,
+    "Height": 120,
     "DeviceType": "Circular",
     "Options": null
   }

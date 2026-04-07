@@ -16,7 +16,7 @@ Directory.CreateDirectory(outputDir);
 
 var imageConfigs = new[]
 {
-    new ImageConfig(Path.Combine(imagesDir, "1.png"), Path.Combine(configsDir, "1.json")),
+    // new ImageConfig(Path.Combine(imagesDir, "1.png"), Path.Combine(configsDir, "1.json")),
     // new ImageConfig(Path.Combine(imagesDir, "2.png"), Path.Combine(configsDir, "2.json")),
     // new ImageConfig(Path.Combine(imagesDir, "3.png"), Path.Combine(configsDir, "3.json")),
     // new ImageConfig(Path.Combine(imagesDir, "5.png"), Path.Combine(configsDir, "5.json")),
@@ -35,7 +35,7 @@ var imageConfigs = new[]
     // new ImageConfig(Path.Combine(imagesDir, "18.png"), Path.Combine(configsDir, "18.json")),
     // new ImageConfig(Path.Combine(imagesDir, "19.png"), Path.Combine(configsDir, "19.json")),
     // new ImageConfig(Path.Combine(imagesDir, "20.png"), Path.Combine(configsDir, "20.json")),
-    // new ImageConfig(Path.Combine(imagesDir, "21.png"), Path.Combine(configsDir, "21.json")),
+    new ImageConfig(Path.Combine(imagesDir, "21.png"), Path.Combine(configsDir, "21.json")),
     // new ImageConfig(Path.Combine(imagesDir, "22.png"), Path.Combine(configsDir, "22.json")),
     // new ImageConfig(Path.Combine(imagesDir, "23.png"), Path.Combine(configsDir, "23.json")),
     // new ImageConfig(Path.Combine(imagesDir, "24.png"), Path.Combine(configsDir, "24.json")),
