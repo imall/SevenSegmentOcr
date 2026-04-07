@@ -3,10 +3,8 @@ using SevenSegmentOcr.Models;
 
 namespace SevenSegmentOcr.Imaging;
 
-public class ImageProcessor
+public class ImageProcessor(RoiLoader roiLoader)
 {
-    private readonly RoiLoader _roiLoader = new(expandPixels: 0);
-
     /// <summary>
     /// 處理單一圖片的所有 ROI，回傳前處理結果清單
     /// </summary>
@@ -16,7 +14,7 @@ public class ImageProcessor
 
         foreach (var cfg in configs)
         {
-            using var roi = _roiLoader.Crop(fullImage, cfg);
+            using var roi = roiLoader.Crop(fullImage, cfg);
 
             if (roi.Empty())
             {
