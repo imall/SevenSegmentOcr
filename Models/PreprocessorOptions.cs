@@ -32,4 +32,22 @@ public class PreprocessorOptions
     /// 高於此值視為大片背景噪音被捨棄。
     /// </summary>
     public double MaxComponentAreaRatio { get; set; } = 0.35; // 35%
+
+    /// <summary>
+    /// Bilateral Filter 的鄰域直徑（像素）。
+    /// 值越大感知範圍越廣，但速度越慢，建議 5~9。
+    /// </summary>
+    public int BilateralD { get; set; } = 9;
+
+    /// <summary>
+    /// Bilateral Filter 的色彩/空間 Sigma 值。
+    /// 值越大邊緣保留越激進，建議 50~100。
+    /// </summary>
+    public double BilateralSigma { get; set; } = 75;
+
+    /// <summary>
+    /// 形態學 Opening 的 kernel 大小（像素，放大後的圖）。
+    /// 用於移除二值化後的孤立噪點，建議 2~4。設為 0 時跳過此步驟。
+    /// </summary>
+    public int OpeningKernelSize { get; set; } = 3;
 }
