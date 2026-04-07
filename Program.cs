@@ -3,7 +3,7 @@ using SevenSegmentOcr.Imaging;
 using SevenSegmentOcr.Models;
 using System.Text.Json;
 using System.Text.Json.Serialization;
-using Tesseract;
+using SevenSegmentOcr.Recognition;
 
 var projectRoot = GetProjectRoot();
 var configsDir  = Path.Combine(projectRoot, "configs");
@@ -16,27 +16,19 @@ Directory.CreateDirectory(outputDir);
 
 var imageConfigs = new[]
 {
-    new ImageConfig(
-        ImagePath:  Path.Combine(imagesDir,  "1.png"),
-        ConfigPath: Path.Combine(configsDir, "1.json")),
-    new ImageConfig(
-        ImagePath:  Path.Combine(imagesDir,  "2.png"),
-        ConfigPath: Path.Combine(configsDir, "2.json")),
+    new ImageConfig(Path.Combine(imagesDir, "1.png"), Path.Combine(configsDir, "1.json")),
+    new ImageConfig(Path.Combine(imagesDir, "2.png"), Path.Combine(configsDir, "2.json")),
 };
 
-var roiLoader  = new RoiLoader(expandPixels: 0);
 var jsonOptions = new JsonSerializerOptions
 {
-    WriteIndented       = true,
+    WriteIndented          = true,
     DefaultIgnoreCondition = JsonIgnoreCondition.Never,
     Encoder = System.Text.Encodings.Web.JavaScriptEncoder.UnsafeRelaxedJsonEscaping,
-
 };
 
-TesseractEngine? tessEngine = runOcr
-    ? new TesseractEngine(tessData, "lets", EngineMode.Default)
-    : null;
-tessEngine?.SetVariable("tessedit_char_whitelist", "0123456789.Cc");
+var imageProcessor = new ImageProcessor();
+OcrRunner? ocrRunner = runOcr ? new OcrRunner(tessData) : null;
 
 try
 {
@@ -54,144 +46,82 @@ try
             continue;
         }
 
-        RoiDefinition[] configs = GetOrSelectRois(fullImage, imageConfig);
+        var roiConfigs  = GetOrSelectRois(fullImage, imageConfig);
+        var processedList = imageProcessor.Process(fullImage, roiConfigs);
+        var imageName   = Path.GetFileNameWithoutExtension(imageConfig.ImagePath);
+        var roiResults  = new List<object>();
 
-        var roiResults = new List<object>();
-
-        foreach (var cfg in configs)
+        foreach (var item in processedList)
         {
-            using var roi = roiLoader.Crop(fullImage, cfg);
-
-            // ROI 超出範圍
-            if (roi.Empty())
+            // 前處理失敗
+            if (item.Processed is null)
             {
-                roiResults.Add(new
-                {
-                    id          = cfg.Id,
-                    deviceType  = cfg.DeviceType.ToString(),
-                    rawOcr      = (string?)null,
-                    value       = (string?)null,
-                    success     = false,
-                    errorReason = "ROI 超出圖片範圍",
-                });
+                roiResults.Add(MakeResult(item.Config, rawOcr: null, success: false, item.Error));
                 continue;
             }
 
-            using var preprocessor = new ImagePreprocessor(cfg.Options);
-            using var processed    = preprocessor.Process(roi);
-
             // 儲存前處理圖
-            var procPath = Path.Combine(outputDir,
-                Path.GetFileNameWithoutExtension(imageConfig.ImagePath),
-                $"{cfg.Id}_proc.jpg");
-            Directory.CreateDirectory(Path.GetDirectoryName(procPath)!);
-            Cv2.ImWrite(procPath, processed);
+            ImageProcessor.SaveProcessed(item.Processed, outputDir, imageName, item.Config.Id);
 
-            if (!runOcr || tessEngine is null)
+            // OCR 未啟用
+            if (ocrRunner is null)
             {
-                roiResults.Add(new
-                {
-                    id          = cfg.Id,
-                    deviceType  = cfg.DeviceType.ToString(),
-                    rawOcr      = (string?)null,
-                    value       = (string?)null,
-                    success     = false,
-                    errorReason = "OCR 未啟用",
-                });
+                roiResults.Add(MakeResult(item.Config, rawOcr: null, success: false, "OCR 未啟用"));
+                item.Processed.Dispose();
                 continue;
             }
 
             // 執行 OCR
-            var (rawOcr, ocrError) = RunTesseract(tessEngine, processed);
+            var (raw, error) = ocrRunner.Recognize(item.Processed);
+            item.Processed.Dispose();
 
-            if (ocrError is not null)
+            if (error is not null)
             {
-                roiResults.Add(new
-                {
-                    id          = cfg.Id,
-                    deviceType  = cfg.DeviceType.ToString(),
-                    rawOcr      = (string?)null,
-                    value       = (string?)null,
-                    success     = false,
-                    errorReason = ocrError,
-                });
+                roiResults.Add(MakeResult(item.Config, rawOcr: null, success: false, error));
                 continue;
             }
 
-            if (string.IsNullOrWhiteSpace(rawOcr))
+            if (string.IsNullOrWhiteSpace(raw))
             {
-                roiResults.Add(new
-                {
-                    id          = cfg.Id,
-                    deviceType  = cfg.DeviceType.ToString(),
-                    rawOcr      = rawOcr,
-                    value       = (string?)null,
-                    success     = false,
-                    errorReason = "OCR 回傳空白",
-                });
+                roiResults.Add(MakeResult(item.Config, rawOcr: raw, success: false, "OCR 回傳空白"));
                 continue;
             }
 
-            // 成功
-            roiResults.Add(new
-            {
-                id          = cfg.Id,
-                deviceType  = cfg.DeviceType.ToString(),
-                rawOcr      = rawOcr,
-                value       = rawOcr,   // 目前先直接用，之後可加解析邏輯
-                success     = true,
-                errorReason = (string?)null,
-            });
+            roiResults.Add(MakeResult(item.Config, rawOcr: raw, success: true, errorReason: null));
         }
 
-        // 輸出整張圖的 JSON 結果
-        var output = new
+        Console.WriteLine(JsonSerializer.Serialize(new
         {
             imagePath = imageConfig.ImagePath,
             results   = roiResults,
-        };
-        Console.WriteLine(JsonSerializer.Serialize(output, jsonOptions));
+        }, jsonOptions));
     }
 }
 finally
 {
-    tessEngine?.Dispose();
+    ocrRunner?.Dispose();
 }
 
+
 // ════════════════════════════════════════════════════════════════
-// Tesseract 辨識，回傳 (rawText, errorMessage)
+// 輔助方法
 // ════════════════════════════════════════════════════════════════
-static (string? raw, string? error) RunTesseract(TesseractEngine engine, Mat processedMat)
+static object MakeResult(RoiDefinition cfg, string? rawOcr, bool success, string? errorReason) => new
 {
-    try
-    {
-        // ★ 先把圖片縮放到固定高度，讓 DPI 計算穩定
-        int targetHeight = 100;
-        double scale = (double)targetHeight / processedMat.Rows;
-        using var resized = new Mat();
-        Cv2.Resize(processedMat, resized, new Size(0, 0), scale, scale, InterpolationFlags.Cubic);
+    id          = cfg.Id,
+    deviceType  = cfg.DeviceType.ToString(),
+    rawOcr,
+    value       = success ? rawOcr : null,
+    success,
+    errorReason,
+};
 
-        Cv2.ImEncode(".png", resized, out byte[] buf);
-        using var pix  = Pix.LoadFromMemory(buf);
-        using var page = engine.Process(pix, PageSegMode.SingleLine);
-        return (page.GetText().Trim(), null);
-    }
-    catch (Exception ex)
-    {
-        return (null, $"Tesseract 例外：{ex.Message}");
-    }
-}
-
-// ════════════════════════════════════════════════════════════════
-// 以下不動
-// ════════════════════════════════════════════════════════════════
 static RoiDefinition[] GetOrSelectRois(Mat fullImage, ImageConfig imageConfig)
 {
     if (imageConfig.ConfigPath is not null)
     {
         var loaded = RoiConfigStore.TryLoad(imageConfig.ConfigPath);
-        if (loaded is { Length: > 0 })
-            return loaded;
+        if (loaded is { Length: > 0 }) return loaded;
     }
 
     Console.Error.WriteLine("  進入互動圈選模式（SPACE/ENTER 確認，ESC 完成）");
@@ -224,9 +154,8 @@ static RoiDefinition[] PromptDeviceTypes(RoiDefinition[] rois)
 
 static string GetProjectRoot()
 {
-    var baseDir = AppContext.BaseDirectory; // bin/Debug/net8.0/
+    var baseDir = AppContext.BaseDirectory;
     return Path.GetFullPath(Path.Combine(baseDir, "..", "..", ".."));
 }
 
 record ImageConfig(string ImagePath, string? ConfigPath = null);
-
