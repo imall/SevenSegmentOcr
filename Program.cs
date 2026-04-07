@@ -1,84 +1,148 @@
 using OpenCvSharp;
 using SevenSegmentOcr.Imaging;
 using SevenSegmentOcr.Models;
+using System.Text.Json;
+using System.Text.Json.Serialization;
 using Tesseract;
 
-const string outputDir  = @"D:\projects\ocr";
-const string tessData   = "./Tessdata"; 
-
-// ★ 控制旗標：true = 跑辨識，false = 只切圖
-const bool runOcr = false;
+const string outputDir = @"D:\projects\ocr";
+const string tessData  = "./Tessdata";
+const bool   runOcr    = true;
 
 Directory.CreateDirectory(outputDir);
 
 var imageConfigs = new[]
 {
-    new ImageConfig(ImagePath: "./images/1.png",  ConfigPath: "./configs/1.json"),
-    new ImageConfig(ImagePath: "./images/2.png",  ConfigPath: "./configs/2.json"),
-    new ImageConfig(ImagePath: "./images/3.png",  ConfigPath: "./configs/3.json"),
-    new ImageConfig(ImagePath: "./images/16.png", ConfigPath: "./configs/16.json"),
+    new ImageConfig(ImagePath: "./images/2.png", ConfigPath: "./configs/2.json"),
 };
 
-var roiLoader = new RoiLoader(expandPixels: 0);
+var roiLoader  = new RoiLoader(expandPixels: 0);
+var jsonOptions = new JsonSerializerOptions
+{
+    WriteIndented       = true,
+    DefaultIgnoreCondition = JsonIgnoreCondition.Never,
+    Encoder = System.Text.Encodings.Web.JavaScriptEncoder.UnsafeRelaxedJsonEscaping,
 
-// ★ 只有 runOcr = true 才建立 Tesseract engine
+};
+
 TesseractEngine? tessEngine = runOcr
     ? new TesseractEngine(tessData, "lets", EngineMode.Default)
     : null;
-
-tessEngine?.SetVariable("tessedit_char_whitelist", "-0123456789.C%");
+tessEngine?.SetVariable("tessedit_char_whitelist", "0123456789.Cc");
 
 try
 {
     foreach (var imageConfig in imageConfigs)
     {
-        Console.WriteLine($"\n══ 處理圖片：{imageConfig.ImagePath}");
-
         using var fullImage = Cv2.ImRead(imageConfig.ImagePath, ImreadModes.Color);
         if (fullImage.Empty())
         {
-            Console.WriteLine($"  [錯誤] 無法載入：{imageConfig.ImagePath}");
+            Console.WriteLine(JsonSerializer.Serialize(new
+            {
+                imagePath = imageConfig.ImagePath,
+                error     = "無法載入圖片",
+                results   = Array.Empty<object>(),
+            }, jsonOptions));
             continue;
         }
-        Console.WriteLine($"  尺寸：{fullImage.Cols}x{fullImage.Rows}");
 
         RoiDefinition[] configs = GetOrSelectRois(fullImage, imageConfig);
-        if (configs.Length == 0)
-        {
-            Console.WriteLine("  [跳過] 未框選任何 ROI");
-            continue;
-        }
 
-        var imageName   = Path.GetFileNameWithoutExtension(imageConfig.ImagePath);
-        var imageOutDir = Path.Combine(outputDir, imageName);
-        Directory.CreateDirectory(imageOutDir);
+        var roiResults = new List<object>();
 
         foreach (var cfg in configs)
         {
             using var roi = roiLoader.Crop(fullImage, cfg);
+
+            // ROI 超出範圍
             if (roi.Empty())
             {
-                Console.WriteLine($"  [跳過] id={cfg.Id} ROI 超出圖片範圍");
+                roiResults.Add(new
+                {
+                    id          = cfg.Id,
+                    deviceType  = cfg.DeviceType.ToString(),
+                    rawOcr      = (string?)null,
+                    value       = (string?)null,
+                    success     = false,
+                    errorReason = "ROI 超出圖片範圍",
+                });
                 continue;
             }
 
             using var preprocessor = new ImagePreprocessor(cfg.Options);
             using var processed    = preprocessor.Process(roi);
 
-            // ── 切圖輸出（永遠執行）──────────────────────────────
-            var procPath = Path.Combine(imageOutDir, $"{cfg.Id}_proc.jpg");
+            // 儲存前處理圖
+            var procPath = Path.Combine(outputDir,
+                Path.GetFileNameWithoutExtension(imageConfig.ImagePath),
+                $"{cfg.Id}_proc.jpg");
+            Directory.CreateDirectory(Path.GetDirectoryName(procPath)!);
             Cv2.ImWrite(procPath, processed);
-            Console.Write($"  id={cfg.Id:D2} [{cfg.DeviceType,-11}] → {procPath}");
 
-            // ★ 辨識（只有 runOcr = true 才執行）────────────────
-            if (runOcr && tessEngine is not null)
+            if (!runOcr || tessEngine is null)
             {
-                string rawText = RunTesseract(tessEngine, processed);
-                Console.Write($"  OCR='{rawText}'");
+                roiResults.Add(new
+                {
+                    id          = cfg.Id,
+                    deviceType  = cfg.DeviceType.ToString(),
+                    rawOcr      = (string?)null,
+                    value       = (string?)null,
+                    success     = false,
+                    errorReason = "OCR 未啟用",
+                });
+                continue;
             }
 
-            Console.WriteLine();
+            // 執行 OCR
+            var (rawOcr, ocrError) = RunTesseract(tessEngine, processed);
+
+            if (ocrError is not null)
+            {
+                roiResults.Add(new
+                {
+                    id          = cfg.Id,
+                    deviceType  = cfg.DeviceType.ToString(),
+                    rawOcr      = (string?)null,
+                    value       = (string?)null,
+                    success     = false,
+                    errorReason = ocrError,
+                });
+                continue;
+            }
+
+            if (string.IsNullOrWhiteSpace(rawOcr))
+            {
+                roiResults.Add(new
+                {
+                    id          = cfg.Id,
+                    deviceType  = cfg.DeviceType.ToString(),
+                    rawOcr      = rawOcr,
+                    value       = (string?)null,
+                    success     = false,
+                    errorReason = "OCR 回傳空白",
+                });
+                continue;
+            }
+
+            // 成功
+            roiResults.Add(new
+            {
+                id          = cfg.Id,
+                deviceType  = cfg.DeviceType.ToString(),
+                rawOcr      = rawOcr,
+                value       = rawOcr,   // 目前先直接用，之後可加解析邏輯
+                success     = true,
+                errorReason = (string?)null,
+            });
         }
+
+        // 輸出整張圖的 JSON 結果
+        var output = new
+        {
+            imagePath = imageConfig.ImagePath,
+            results   = roiResults,
+        };
+        Console.WriteLine(JsonSerializer.Serialize(output, jsonOptions));
     }
 }
 finally
@@ -86,24 +150,27 @@ finally
     tessEngine?.Dispose();
 }
 
-Console.WriteLine($"\n完成，請檢查：{Path.GetFullPath(outputDir)}");
-
 // ════════════════════════════════════════════════════════════════
-// Tesseract 辨識
+// Tesseract 辨識，回傳 (rawText, errorMessage)
 // ════════════════════════════════════════════════════════════════
-static string RunTesseract(TesseractEngine engine, Mat processedMat)
+static (string? raw, string? error) RunTesseract(TesseractEngine engine, Mat processedMat)
 {
     try
     {
-        // OpenCvSharp Mat → byte[] → Tesseract Pix
-        Cv2.ImEncode(".png", processedMat, out byte[] buf);
+        // ★ 先把圖片縮放到固定高度，讓 DPI 計算穩定
+        int targetHeight = 100;
+        double scale = (double)targetHeight / processedMat.Rows;
+        using var resized = new Mat();
+        Cv2.Resize(processedMat, resized, new Size(0, 0), scale, scale, InterpolationFlags.Cubic);
+
+        Cv2.ImEncode(".png", resized, out byte[] buf);
         using var pix  = Pix.LoadFromMemory(buf);
-        using var page = engine.Process(pix);
-        return page.GetText().Trim();
+        using var page = engine.Process(pix, PageSegMode.SingleLine);
+        return (page.GetText().Trim(), null);
     }
     catch (Exception ex)
     {
-        return $"[錯誤:{ex.Message}]";
+        return (null, $"Tesseract 例外：{ex.Message}");
     }
 }
 
@@ -116,14 +183,10 @@ static RoiDefinition[] GetOrSelectRois(Mat fullImage, ImageConfig imageConfig)
     {
         var loaded = RoiConfigStore.TryLoad(imageConfig.ConfigPath);
         if (loaded is { Length: > 0 })
-        {
-            Console.WriteLine($"  載入 ROI 設定：{imageConfig.ConfigPath} ({loaded.Length} 個)");
             return loaded;
-        }
     }
 
-    Console.WriteLine("  進入互動圈選模式");
-    Console.WriteLine("  操作：拖曳框選 → SPACE/ENTER 確認 → ESC 完成所有選取");
+    Console.Error.WriteLine("  進入互動圈選模式（SPACE/ENTER 確認，ESC 完成）");
     var selected = RoiSelector.Select(fullImage);
     if (selected.Length == 0) return selected;
 
@@ -131,11 +194,8 @@ static RoiDefinition[] GetOrSelectRois(Mat fullImage, ImageConfig imageConfig)
 
     if (imageConfig.ConfigPath is not null)
     {
-        Directory.CreateDirectory(
-            Path.GetDirectoryName(imageConfig.ConfigPath) ?? ".");
+        Directory.CreateDirectory(Path.GetDirectoryName(imageConfig.ConfigPath) ?? ".");
         RoiConfigStore.Save(selected, imageConfig.ConfigPath);
-        Console.WriteLine($"  已儲存 ROI → {imageConfig.ConfigPath}");
-        Console.WriteLine($"  [提示] 可直接編輯 JSON 調整 DeviceType 或 MorphKernelSize");
     }
 
     return selected;
@@ -143,17 +203,14 @@ static RoiDefinition[] GetOrSelectRois(Mat fullImage, ImageConfig imageConfig)
 
 static RoiDefinition[] PromptDeviceTypes(RoiDefinition[] rois)
 {
-    Console.WriteLine("\n  請為每個 ROI 設定裝置類型：");
     var result = new List<RoiDefinition>();
-
     foreach (var roi in rois)
     {
-        Console.Write($"    ROI id={roi.Id} → 輸入裝置類型 [c=圓形 / r=長形，預設=圓形]：");
-        var input = Console.ReadLine()?.Trim().ToLower();
+        Console.Error.Write($"  ROI id={roi.Id} [c=圓形 / r=長形，預設=圓形]：");
+        var input      = Console.ReadLine()?.Trim().ToLower();
         var deviceType = input == "r" ? DeviceType.Rectangular : DeviceType.Circular;
         result.Add(roi with { DeviceType = deviceType });
     }
-
     return result.ToArray();
 }
 
