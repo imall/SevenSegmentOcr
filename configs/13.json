@@ -1,0 +1,110 @@
+[
+  {
+    "Id": 1,
+    "X": 1023,
+    "Y": 419,
+    "Width": 246,
+    "Height": 110,
+    "DeviceType": "Circular",
+    "Options": null
+  },
+  {
+    "Id": 2,
+    "X": 1771,
+    "Y": 454,
+    "Width": 257,
+    "Height": 116,
+    "DeviceType": "Circular",
+    "Options": null
+  },
+  {
+    "Id": 3,
+    "X": 2571,
+    "Y": 459,
+    "Width": 243,
+    "Height": 113,
+    "DeviceType": "Circular",
+    "Options": null
+  },
+  {
+    "Id": 4,
+    "X": 3262,
+    "Y": 404,
+    "Width": 208,
+    "Height": 136,
+    "DeviceType": "Rectangular",
+    "Options": null
+  },
+  {
+    "Id": 5,
+    "X": 1017,
+    "Y": 1600,
+    "Width": 246,
+    "Height": 116,
+    "DeviceType": "Circular",
+    "Options": null
+  },
+  {
+    "Id": 6,
+    "X": 1739,
+    "Y": 1586,
+    "Width": 254,
+    "Height": 95,
+    "DeviceType": "Circular",
+    "Options": null
+  },
+  {
+    "Id": 7,
+    "X": 2510,
+    "Y": 1626,
+    "Width": 246,
+    "Height": 87,
+    "DeviceType": "Circular",
+    "Options": null
+  },
+  {
+    "Id": 8,
+    "X": 3233,
+    "Y": 1551,
+    "Width": 208,
+    "Height": 136,
+    "DeviceType": "Rectangular",
+    "Options": null
+  },
+  {
+    "Id": 9,
+    "X": 930,
+    "Y": 2655,
+    "Width": 182,
+    "Height": 156,
+    "DeviceType": "Rectangular",
+    "Options": null
+  },
+  {
+    "Id": 10,
+    "X": 1673,
+    "Y": 2629,
+    "Width": 191,
+    "Height": 144,
+    "DeviceType": "Rectangular",
+    "Options": null
+  },
+  {
+    "Id": 11,
+    "X": 2418,
+    "Y": 2606,
+    "Width": 196,
+    "Height": 147,
+    "DeviceType": "Rectangular",
+    "Options": null
+  },
+  {
+    "Id": 12,
+    "X": 3200,
+    "Y": 2704,
+    "Width": 257,
+    "Height": 108,
+    "DeviceType": "Circular",
+    "Options": null
+  }
+]
