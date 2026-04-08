@@ -8,75 +8,102 @@ namespace SevenSegmentOcr.Parsing;
 /// </summary>
 public static class ValueParser
 {
-    private static readonly Regex DigitsOnly = new(@"[^0-9.]", RegexOptions.Compiled);
+    /// <summary>
+    /// 清理 OCR 結果，判斷溫度或濕度
+    /// </summary>
+    public static (string? Value, string? Unit, string? Error) PostProcess(string raw, DeviceType deviceType)
+    {
+        if (string.IsNullOrWhiteSpace(raw))
+            return (null, null, "OCR 回傳空白");
+
+        // Step 1：移除所有空白
+        var cleaned = raw.Replace(" ", "");
+
+        // Step 2：只保留數字和小數點
+        cleaned = Regex.Replace(cleaned, @"[^0-9.]", "");
+
+        if (string.IsNullOrWhiteSpace(cleaned))
+            return (null, null, "後處理後無有效數值");
+
+        // Step 3：小數點出現在第一個字元，去除它
+        cleaned = cleaned.TrimStart('.');
+
+        if (string.IsNullOrWhiteSpace(cleaned))
+            return (null, null, "移除前導小數點後無有效數值");
+
+        // Step 4：處理連續小數點
+        cleaned = Regex.Replace(cleaned, @"\.{2,}", ".");
+
+        // Step 5：若有多個分散的小數點，保留第一個，移除其餘
+        int firstDot = cleaned.IndexOf('.');
+        if (firstDot >= 0)
+        {
+            var beforeDot = cleaned[..(firstDot + 1)];
+            var afterDot  = cleaned[(firstDot + 1)..].Replace(".", "");
+            cleaned = beforeDot + afterDot;
+        }
+
+        // Step 6：嘗試解析數值
+        if (!decimal.TryParse(cleaned,
+                System.Globalization.NumberStyles.Any,
+                System.Globalization.CultureInfo.InvariantCulture,
+                out var numericValue))
+            return (null, null, $"無法解析為數值：{cleaned}");
+
+        // Step 7：長型裝置 → 直接回傳溫度
+        if (deviceType == DeviceType.Rectangular)
+        {
+            var truncated = TruncateToOneDecimal(cleaned);
+            return (truncated, "°C", null);
+        }
+
+        // Step 8：圓形裝置 → 判斷溫度或濕度
+        return ResolveCircularDeviceReading(cleaned, numericValue);
+    }
 
     /// <summary>
-    /// 從解碼器輸出的原始字串自動判斷溫度或濕度，再呼叫有型別版本。
-    /// 結尾為 'C' → 溫度；結尾為 '%' → 濕度；其他 → 預設溫度。
+    /// 圓形裝置讀值判斷邏輯
     /// </summary>
-    public static OcrResult Parse(string rawText)
+    private static (string? Value, string? Unit, string? Error) ResolveCircularDeviceReading(
+        string cleaned, decimal numericValue)
     {
-        var t = rawText.TrimEnd();
-        var valueType = t.EndsWith('C') ? DisplayValueType.Temperature
-                      : t.EndsWith('%') ? DisplayValueType.Humidity
-                      : DisplayValueType.Temperature;
-        return Parse(rawText, valueType);
-    }
+        int firstDot = cleaned.IndexOf('.');
 
-    public static OcrResult Parse(string rawText, DisplayValueType valueType)
-    {
-        // 1. 只保留數字和小數點
-        string clean = DigitsOnly.Replace(rawText, "");
-
-        if (string.IsNullOrEmpty(clean))
-            return OcrResult.Failure($"無法從 '{rawText}' 提取數字");
-
-        // 2. 修正常見問題：沒有小數點時嘗試自動補位
-        //    例如：253 → 25.3（溫度通常是 XX.X 格式）
-        clean = FixMissingDecimalPoint(clean, valueType);
-
-        // 3. 嘗試解析
-        if (!double.TryParse(clean, out double val))
-            return OcrResult.Failure($"無法解析數值：'{clean}'");
-
-        // 4. 修正常見辨識錯誤：前導數字遺失
-        //    例如：4.9 → 24.9（在室溫場景下）
-        val = FixMissingLeadingDigit(val, valueType);
-
-        // 5. 範圍驗證
-        return valueType == DisplayValueType.Temperature
-            ? ValidateTemperature(val, clean)
-            : ValidateHumidity(val, clean);
-    }
-
-    private static string FixMissingDecimalPoint(string text, DisplayValueType type)
-    {
-        // 只對溫度/濕度的典型長度處理（3位數字沒有小數點）
-        if (text.Contains('.') || text.Length < 3) return text;
-
-        // 溫度：253 → 25.3
-        // 濕度：524 → 52.4
-        return text[..^1] + "." + text[^1..];
-    }
-
-    private static double FixMissingLeadingDigit(double val, DisplayValueType type)
-    {
-        if (type == DisplayValueType.Temperature)
+        // 規則 A：無小數點且為四位數 → 補小數點 (2567 → 25.67 → 25.6)
+        if (firstDot < 0 && cleaned.Length == 4)
         {
-            // 4.x ~ 5.x 大概率是 24.x ~ 25.x（根據你的場景調整這個範圍）
-            if (val is >= 4.0 and <= 5.9)
-                return val + 20.0;
+            cleaned  = cleaned[..2] + "." + cleaned[2..];
+            cleaned = TruncateToOneDecimal(cleaned);
+            return (cleaned, "°C", null);
         }
-        return val;
+
+        // 規則 B：有小數點 → 依小數位數判斷
+        if (firstDot >= 0)
+        {
+            var afterDot = cleaned[(firstDot + 1)..];
+            if (afterDot.Length >= 2)
+            {
+                return (TruncateToOneDecimal(cleaned), "°C", null);
+            }
+            else
+            {
+                return (cleaned, "%", null);
+            }
+        }
+
+        // 規則 C：無小數點且非四位數 → 用數值範圍判斷
+        bool isTemperature = numericValue < 0 || numericValue > 100;
+        return (cleaned, isTemperature ? "°C" : "%", null);
     }
 
-    private static OcrResult ValidateTemperature(double val, string raw) =>
-        val is >= -40.0 and <= 200.0
-            ? OcrResult.From(val, DisplayValueType.Temperature, raw, 1.0)
-            : OcrResult.Failure($"溫度超出合理範圍：{val}°C");
-
-    private static OcrResult ValidateHumidity(double val, string raw) =>
-        val is >= 0.0 and <= 100.0
-            ? OcrResult.From(val, DisplayValueType.Humidity, raw, 1.0)
-            : OcrResult.Failure($"濕度超出合理範圍：{val}%");
+    /// <summary>
+    /// 工具：無條件捨去小數點第二位，保留一位小數
+    /// </summary>
+    private static string TruncateToOneDecimal(string value)
+    {
+        int dot = value.IndexOf('.');
+        if (dot < 0) return value;
+        var truncated = value[..System.Math.Min(dot + 2, value.Length)];
+        return truncated;
+    }
 }

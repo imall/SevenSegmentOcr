@@ -6,6 +6,7 @@ using System.Text.Json;
 using System.Text.Json.Serialization;
 using System.Text.RegularExpressions;
 using SevenSegmentOcr.Recognition;
+using SevenSegmentOcr.Parsing;
 
 var projectRoot = GetProjectRoot();
 var configsDir = Path.Combine(projectRoot, "configs");
@@ -40,7 +41,7 @@ var imageConfigs = new[]
     // new ImageConfig(Path.Combine(imagesDir, "21.png"), Path.Combine(configsDir, "21.json")),
     // new ImageConfig(Path.Combine(imagesDir, "22.png"), Path.Combine(configsDir, "22.json")),
     // new ImageConfig(Path.Combine(imagesDir, "23.png"), Path.Combine(configsDir, "23.json")),
-    // new ImageConfig(Path.Combine(imagesDir, "24.png"), Path.Combine(configsDir, "24.json")),
+    new ImageConfig(Path.Combine(imagesDir, "24.png"), Path.Combine(configsDir, "24.json")),
     new ImageConfig(Path.Combine(imagesDir, "25.png"), Path.Combine(configsDir, "25.json")),
     // new ImageConfig(Path.Combine(imagesDir, "26.png"), Path.Combine(configsDir, "26.json")),
     // new ImageConfig(Path.Combine(imagesDir, "27.png"), Path.Combine(configsDir, "27.json")),
@@ -119,7 +120,7 @@ try
             }
 
             // ★ 後處理
-            var (value, unit, postError) = PostProcess(raw, item.Config.DeviceType);
+            var (value, unit, postError) = ValueParser.PostProcess(raw, item.Config.DeviceType);
 
             if (postError is not null)
             {
@@ -198,119 +199,6 @@ static string GetProjectRoot()
 {
     var baseDir = AppContext.BaseDirectory;
     return Path.GetFullPath(Path.Combine(baseDir, "..", "..", ".."));
-}
-
-// ════════════════════════════════════════════════════════════════
-// 後處理：清理 OCR 結果，判斷溫度或濕度
-// ════════════════════════════════════════════════════════════════
-static (string? Value, string? Unit, string? Error) PostProcess(string raw, DeviceType deviceType)
-{
-    if (string.IsNullOrWhiteSpace(raw))
-        return (null, null, "OCR 回傳空白");
-
-    // ── Step 1：移除所有空白 ──────────────────────────────────────
-    var cleaned = raw.Replace(" ", "");
-
-
-    // ── Step 2：只保留數字和小數點 ───────────────────────────────
-    cleaned = Regex.Replace(cleaned, @"[^0-9.]", "");
-
-    if (string.IsNullOrWhiteSpace(cleaned))
-        return (null, null, "後處理後無有效數值");
-    
-    
-    // ── Step 3：小數點出現在第一個字元，去除它 (.23.53 → 23.53) ──
-    cleaned = cleaned.TrimStart('.');
-    
-    if (string.IsNullOrWhiteSpace(cleaned))
-        return (null, null, "移除前導小數點後無有效數值");
-    
-    // ── Step 4：處理連續小數點 (23..53 → 23.53) ──────────────────
-    // 用正則合併連續小數點為一個
-    cleaned = Regex.Replace(cleaned, @"\.{2,}", ".");
-
-    // ── Step 5：若有多個分散的小數點，保留第一個，移除其餘 ────────
-    int firstDot = cleaned.IndexOf('.');
-    if (firstDot >= 0)
-    {
-        var beforeDot = cleaned[..(firstDot + 1)];
-        var afterDot  = cleaned[(firstDot + 1)..].Replace(".", "");
-        cleaned = beforeDot + afterDot;
-    }
-
-    // ── Step 6：嘗試解析數值 ──────────────────────────────────────
-    if (!decimal.TryParse(cleaned,
-            NumberStyles.Any,
-            CultureInfo.InvariantCulture,
-            out var numericValue))
-        return (null, null, $"無法解析為數值：{cleaned}");
-
-    // ── Step 7：長型裝置 → 直接回傳溫度 ──────────────────────────
-    if (deviceType == DeviceType.Rectangular)
-    {
-        var truncated = TruncateToOneDecimal(cleaned);
-        return (truncated, "°C", null);
-    }
-
-    // ── Step 8：圓形裝置 → 判斷溫度或濕度 ────────────────────────
-    return ResolveCircularDeviceReading(cleaned, numericValue);
-}
-
-// ════════════════════════════════════════════════════════════════
-// 圓形裝置讀值判斷邏輯
-// ════════════════════════════════════════════════════════════════
-static (string? Value, string? Unit, string? Error) ResolveCircularDeviceReading(
-    string cleaned, decimal numericValue)
-{
-    int firstDot = cleaned.IndexOf('.');
-
-    // ── 規則 A：無小數點且為四位數 → 補小數點 (2567 → 25.67 → 25.6) ─
-    if (firstDot < 0 && cleaned.Length == 4)
-    {
-        // 於十位數前補小數點（前兩位.後兩位）
-        cleaned  = cleaned[..2] + "." + cleaned[2..];
-
-        // 無條件捨去小數點第二位（25.67 → 25.6）
-        cleaned = TruncateToOneDecimal(cleaned);
-
-        // 優先判斷為溫度
-        return (cleaned, "°C", null);
-    }
-
-    // ── 規則 B：有小數點 → 依小數位數判斷 ───────────────────────
-    if (firstDot >= 0)
-    {
-        var afterDot = cleaned[(firstDot + 1)..];
-
-        if (afterDot.Length >= 2)
-        {
-            // 小數後兩位以上 → 溫度（截到小數後一位）
-            return (TruncateToOneDecimal(cleaned), "°C", null);
-        }
-        else
-        {
-            // 小數後一位 → 濕度（保留原值）
-            return (cleaned, "%", null);
-        }
-    }
-
-    // ── 規則 C：無小數點且非四位數 → 用數值範圍判斷 ─────────────
-    // 濕度範圍 0–100；溫度可能超過 100 或為負數
-    bool isTemperature = numericValue < 0 || numericValue > 100;
-    return (cleaned, isTemperature ? "°C" : "%", null);
-}
-
-// ════════════════════════════════════════════════════════════════
-// 工具：無條件捨去小數點第二位，保留一位小數
-// ════════════════════════════════════════════════════════════════
-static string TruncateToOneDecimal(string value)
-{
-    int dot = value.IndexOf('.');
-    if (dot < 0) return value; // 沒有小數點，直接回傳
-
-    // 截到小數點後第一位
-    var truncated = value[..Math.Min(dot + 2, value.Length)];
-    return truncated;
 }
 
 record ImageConfig(string ImagePath, string? ConfigPath = null);
